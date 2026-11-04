@@ -1,0 +1,97 @@
+export type ApplicantProfile = {
+  age?: number;
+  ageMin?: number;
+  ageMax?: number;
+  married?: boolean;
+  pregnant?: boolean;
+  hasDaughter?: boolean;
+  bpl?: boolean;
+  rural?: boolean;
+  widowed?: boolean;
+  shgMember?: boolean;
+  firstChild?: boolean;
+  need?: string;
+  district?: string;
+};
+
+type Rules = {
+  minAge?: number;
+  maxAge?: number;
+  married?: boolean;
+  pregnant?: boolean;
+  hasDaughter?: boolean;
+  bpl?: boolean;
+  rural?: boolean;
+  widowed?: boolean;
+  shgMember?: boolean;
+  firstChild?: boolean;
+};
+
+export type EligibilityRuleKey = keyof Rules | "districtAvailability" | "needPreference";
+
+export type EligibilityMatch = {
+  schemeId: string;
+  matched: boolean;
+  rulesApplied: EligibilityRuleKey[];
+  unansweredRules: EligibilityRuleKey[];
+  disclaimer: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function evaluateEligibility(
+  profile: ApplicantProfile,
+  scheme: { id: string; need: string; districts: unknown; rules: unknown },
+): EligibilityMatch {
+  const rules = (isRecord(scheme.rules) ? scheme.rules : {}) as Rules;
+  const rulesApplied: EligibilityRuleKey[] = [];
+  const unansweredRules: EligibilityRuleKey[] = [];
+  let matched = true;
+
+  const ageMin = profile.age ?? profile.ageMin;
+  const ageMax = profile.age ?? profile.ageMax;
+  if (rules.minAge !== undefined) {
+    if (ageMin === undefined || ageMax === undefined) unansweredRules.push("minAge");
+    else if (ageMax < rules.minAge) matched = false;
+    else if (ageMin >= rules.minAge) rulesApplied.push("minAge");
+    else unansweredRules.push("minAge");
+  }
+  if (rules.maxAge !== undefined) {
+    if (ageMin === undefined || ageMax === undefined) unansweredRules.push("maxAge");
+    else if (ageMin > rules.maxAge) matched = false;
+    else if (ageMax <= rules.maxAge) rulesApplied.push("maxAge");
+    else unansweredRules.push("maxAge");
+  }
+
+  const booleanFields: (keyof Rules)[] = [
+    "married", "pregnant", "hasDaughter", "bpl", "rural", "widowed", "shgMember", "firstChild",
+  ];
+  for (const field of booleanFields) {
+    const required = rules[field];
+    if (typeof required !== "boolean") continue;
+    const answer = profile[field];
+    if (answer === undefined) unansweredRules.push(field);
+    else if (answer !== required) matched = false;
+    else rulesApplied.push(field);
+  }
+
+  if (profile.district) {
+    const districts = scheme.districts;
+    if (districts !== "all" && Array.isArray(districts) && !districts.includes(profile.district)) matched = false;
+    else rulesApplied.push("districtAvailability");
+  } else if (scheme.districts !== "all") {
+    unansweredRules.push("districtAvailability");
+  }
+
+  if (profile.need && profile.need === scheme.need) rulesApplied.push("needPreference");
+
+  return {
+    schemeId: scheme.id,
+    matched,
+    rulesApplied,
+    unansweredRules,
+    disclaimer: "Possible match only. The relevant government department makes the final eligibility decision.",
+  };
+}
