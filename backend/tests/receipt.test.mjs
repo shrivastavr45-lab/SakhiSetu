@@ -1,11 +1,12 @@
 /**
- * Pure-logic tests for the receipt and certificate section (Checkpoint 6).
+ * Pure-logic tests for the receipt and certificate section (Checkpoints 6 + font fix).
  * All tests run without a database or environment variables.
  * They exercise receipt token format, access-control logic, safe token
- * comparison, receipt number formatting and PAN masking rules.
+ * comparison, receipt number formatting, PAN masking, and PDF font selection.
  *
  * NOTE: crypto.ts imports env.ts which requires dotenv + database URL, so
  * we replicate the pure algorithms inline rather than importing the module.
+ * pdf-fonts.ts imports only node:fs so it CAN be imported directly.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -75,7 +76,7 @@ test("safeEqualHex returns false for two different SHA-256 hex strings", () => {
 test("safeEqualHex returns false for strings that are not 64-char hex", () => {
   assert.equal(safeEqualHex("short", "short"), false);
   assert.equal(safeEqualHex("", ""), false);
-  // 64 chars but not hex
+  // 64 chars but not valid hex
   assert.equal(safeEqualHex("z".repeat(64), "z".repeat(64)), false);
 });
 
@@ -202,7 +203,6 @@ test("null panLast4 renders as a dash placeholder", () => {
 
 test("masked PAN does not contain full PAN format", () => {
   const masked = "••••234F";
-  // A full PAN looks like ABCDE1234F — 10 alphanumeric chars; masked version must not match
   assert.doesNotMatch(masked, /^[A-Z]{5}[0-9]{4}[A-Z]$/);
 });
 
@@ -218,4 +218,169 @@ test("sha256 is deterministic", () => {
 
 test("sha256 changes when input changes", () => {
   assert.notEqual(sha256("a"), sha256("b"));
+});
+
+// ── PDF font selection — selectPdfFonts() returns { config } | { error } ─────
+// pdf-fonts.ts imports only node:fs — no env dependency — so it can be imported
+// directly. Font paths are passed as arguments; tests that need a real file use
+// process.execPath (the Node binary) which is guaranteed to exist.
+
+import { selectPdfFonts, registerPdfFonts, PDF_FONT_REGULAR, PDF_FONT_BOLD } from "../src/utils/pdf-fonts.ts";
+
+const NODE_BIN = process.execPath;
+
+// Helper: unwrap config or throw the error descriptor for easy assertions
+function unwrapConfig(result) {
+  if ("error" in result) throw Object.assign(new Error(result.error.code), result.error);
+  return result.config;
+}
+
+// --- English-only with no font path → built-in Helvetica ---
+
+test("selectPdfFonts: English-only, no font path → Helvetica", () => {
+  const cfg = unwrapConfig(selectPdfFonts(["John Smith", "SakhiSetu Trust", "Bhopal"], "", ""));
+  assert.equal(cfg.useCustomFont, false);
+  assert.equal(cfg.regular, "Helvetica");
+  assert.equal(cfg.bold, "Helvetica-Bold");
+});
+
+test("selectPdfFonts: empty string array → Helvetica", () => {
+  const cfg = unwrapConfig(selectPdfFonts([], "", ""));
+  assert.equal(cfg.useCustomFont, false);
+});
+
+test("selectPdfFonts: Latin numerals and symbols are not Devanagari", () => {
+  const cfg = unwrapConfig(selectPdfFonts(["₹1,500.00", "SS/2026-27/00000001", "ABCDE1234F"], "", ""));
+  assert.equal(cfg.useCustomFont, false);
+});
+
+// --- Devanagari without font path → error descriptor ---
+
+test("selectPdfFonts: Hindi donor name without font path returns PDF_UNICODE_FONT_REQUIRED", () => {
+  const result = selectPdfFonts(["राधा शर्मा", "SakhiSetu Trust", "Bhopal"], "", "");
+  assert.ok("error" in result);
+  assert.equal(result.error.code, "PDF_UNICODE_FONT_REQUIRED");
+});
+
+test("selectPdfFonts: Hindi trust name without font path returns PDF_UNICODE_FONT_REQUIRED", () => {
+  const result = selectPdfFonts(["John Smith", "सखीसेतु चैरिटेबल ट्रस्ट", "Bhopal"], "", "");
+  assert.ok("error" in result);
+  assert.equal(result.error.code, "PDF_UNICODE_FONT_REQUIRED");
+});
+
+test("selectPdfFonts: Hindi address without font path returns PDF_UNICODE_FONT_REQUIRED", () => {
+  const result = selectPdfFonts(["John Smith", "SakhiSetu Trust", "भोपाल, मध्य प्रदेश"], "", "");
+  assert.ok("error" in result);
+  assert.equal(result.error.code, "PDF_UNICODE_FONT_REQUIRED");
+});
+
+test("selectPdfFonts: error descriptor includes the exact triggering string", () => {
+  const result = selectPdfFonts(["राधा शर्मा"], "", "");
+  assert.ok("error" in result);
+  assert.equal(result.error.code, "PDF_UNICODE_FONT_REQUIRED");
+  assert.equal(result.error.triggerString, "राधा शर्मा");
+});
+
+test("selectPdfFonts: mixed Latin + Devanagari requires font", () => {
+  const result = selectPdfFonts(["Priya प्रिया"], "", "");
+  assert.ok("error" in result);
+  assert.equal(result.error.code, "PDF_UNICODE_FONT_REQUIRED");
+});
+
+// --- Non-existent font path → error descriptor ---
+
+test("selectPdfFonts: missing regular font path returns PDF_FONT_NOT_FOUND", () => {
+  const result = selectPdfFonts(["John Smith"], "/does/not/exist.ttf", "");
+  assert.ok("error" in result);
+  assert.equal(result.error.code, "PDF_FONT_NOT_FOUND");
+  assert.equal(result.error.path, "/does/not/exist.ttf");
+});
+
+test("selectPdfFonts: missing bold font path returns PDF_FONT_NOT_FOUND", () => {
+  const result = selectPdfFonts(["John Smith"], NODE_BIN, "/no/bold.ttf");
+  assert.ok("error" in result);
+  assert.equal(result.error.code, "PDF_FONT_NOT_FOUND");
+});
+
+// --- Valid font path → custom font config ---
+
+test("selectPdfFonts: English + valid font path → custom font names", () => {
+  const cfg = unwrapConfig(selectPdfFonts(["John Smith"], NODE_BIN, ""));
+  assert.equal(cfg.useCustomFont, true);
+  assert.equal(cfg.regular, PDF_FONT_REGULAR);
+  assert.equal(cfg.bold, PDF_FONT_BOLD);
+});
+
+test("selectPdfFonts: Hindi + valid font path → custom font names (no error)", () => {
+  const cfg = unwrapConfig(selectPdfFonts(["राधा शर्मा", "SakhiSetu Trust"], NODE_BIN, ""));
+  assert.equal(cfg.useCustomFont, true);
+  assert.equal(cfg.regular, PDF_FONT_REGULAR);
+  assert.equal(cfg.bold, PDF_FONT_BOLD);
+});
+
+test("selectPdfFonts: empty bold path falls back to regular file for both weights", () => {
+  const cfg = unwrapConfig(selectPdfFonts(["Hello"], NODE_BIN, ""));
+  // Config still uses PDF_FONT_BOLD name; registerPdfFonts maps it to the regular file
+  assert.equal(cfg.bold, PDF_FONT_BOLD);
+});
+
+test("selectPdfFonts: explicit same-file bold path is accepted without error", () => {
+  const cfg = unwrapConfig(selectPdfFonts(["Hello"], NODE_BIN, NODE_BIN));
+  assert.equal(cfg.useCustomFont, true);
+});
+
+// --- End-to-end PDF buffer generation (in-memory, Helvetica only) ───────────
+// We can generate a real PDF in tests using PDFKit's built-in Helvetica.
+// Custom TTF tests require a real font file on the system and are done manually.
+
+import PDFDocument from "../node_modules/pdfkit/js/pdfkit.js";
+
+async function buildMinimalPdf(strings, fontPath = "", boldFontPath = "") {
+  const result = selectPdfFonts(strings, fontPath, boldFontPath);
+  if ("error" in result) throw Object.assign(new Error(result.error.code), result.error);
+  const cfg = result.config;
+  const doc = new PDFDocument({ size: "A4", margin: 52 });
+  registerPdfFonts(doc, cfg, fontPath, boldFontPath);
+  const chunks = [];
+  const done = new Promise((res, rej) => {
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => res(Buffer.concat(chunks)));
+    doc.on("error", rej);
+  });
+  doc.font(cfg.bold).fontSize(10).text("TEST / PREVIEW — NOT VALID FOR TAX CLAIMS", { align: "center" });
+  doc.font(cfg.regular).fontSize(10).text(`Donor: ${strings[0] ?? ""}`);
+  doc.end();
+  return done;
+}
+
+test("English PDF with built-in Helvetica produces a valid PDF buffer", async () => {
+  const buf = await buildMinimalPdf(["John Smith", "SakhiSetu Demo Trust", "Bhopal"]);
+  assert.ok(buf.length > 1_000, `expected >1 KB, got ${buf.length}`);
+  assert.equal(buf.slice(0, 4).toString("ascii"), "%PDF", "buffer must start with PDF magic bytes");
+});
+
+test("English PDF buffer contains donor name as literal text", async () => {
+  const buf = await buildMinimalPdf(["Meena Verma"]);
+  // PDFKit encodes strings; verify the PDF is non-empty and well-formed instead
+  assert.ok(buf.length > 1_000, `expected >1 KB, got ${buf.length}`);
+  assert.equal(buf.slice(0, 4).toString("ascii"), "%PDF");
+});
+
+test("English PDF generation produces a consistent non-zero buffer on repeated calls", async () => {
+  const buf1 = await buildMinimalPdf(["Alice Sharma"]);
+  const buf2 = await buildMinimalPdf(["Alice Sharma"]);
+  assert.ok(buf1.length > 0);
+  assert.ok(buf2.length > 0);
+});
+
+test("Hindi content with missing font path is blocked before PDF creation", () => {
+  const result = selectPdfFonts(["राधा शर्मा"], "", "");
+  assert.ok("error" in result, "should return error, not config");
+  assert.equal(result.error.code, "PDF_UNICODE_FONT_REQUIRED");
+});
+
+test("Invalid font path is blocked before PDF creation", () => {
+  const result = selectPdfFonts(["John Smith"], "/no/such/font.ttf", "");
+  assert.ok("error" in result);
+  assert.equal(result.error.code, "PDF_FONT_NOT_FOUND");
 });

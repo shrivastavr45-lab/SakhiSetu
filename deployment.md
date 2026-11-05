@@ -10,7 +10,7 @@ No live deployment exists in this workspace. The project was supplied as a ZIP w
 - PostgreSQL 14+ accessible from the API host.
 - A network-enabled environment for installing npm packages.
 - Optional: a Gemini API key for the AI assistant and scheme-summary drafting.
-- Optional: a Noto Sans Devanagari-compatible TTF for PDFs with Hindi donor names.
+- Optional: a Noto Sans Devanagari-compatible TTF for PDFs with Hindi donor names (see [Hindi PDF font setup](#hindi-pdf-font-setup) below).
 
 ## Local setup
 
@@ -125,6 +125,60 @@ A donor account can be created from `/account` using the registration form. To h
 - The campaign figures are illustrative seed data inherited from the prototype.
 - Gemini features are unavailable until a valid key is configured. Voice input, donor email/SMS delivery, Form 10BD export, recurring payment scheduling and real payment gateway integration are not included.
 - Before public launch, complete DPDP Act 2023 compliance work, including notice/consent and retention policies, data-subject request handling, processor contracts, incident response and a privacy/security review. This code is not a legal compliance certification.
+
+## Hindi PDF font setup
+
+Receipt PDFs are generated with PDFKit. PDFKit's 14 built-in fonts are Latin-only. When any of the following contain Devanagari characters, a Unicode-capable TTF must be configured:
+
+- Donor name (`donorName` field on the donation record)
+- Trust name (`TRUST_NAME` environment variable)
+- Trust address (`TRUST_ADDRESS` environment variable)
+
+If Devanagari content is detected and no font is configured, the API returns `503 PDF_UNICODE_FONT_REQUIRED` with a message that names the triggering string and links to the download.
+
+**Recommended font: Noto Sans Devanagari**
+
+Noto Sans Devanagari is free, OFL-licensed, covers the full Devanagari Unicode block including half-forms, conjuncts and matras, and renders correctly in PDFKit.
+
+Download from Google Fonts: <https://fonts.google.com/noto/specimen/Noto+Sans+Devanagari>
+
+1. Download the font family ZIP from Google Fonts.
+2. Extract it. The static fonts are in the `static/` subfolder.
+3. Copy the regular-weight file to a stable location on the server:
+
+   ```bash
+   cp NotoSansDevanagari-Regular.ttf /opt/sakhisetu/fonts/NotoSansDevanagari-Regular.ttf
+   ```
+
+4. Optionally copy a bold-weight file for better heading rendering:
+
+   ```bash
+   cp NotoSansDevanagari-SemiBold.ttf /opt/sakhisetu/fonts/NotoSansDevanagari-SemiBold.ttf
+   ```
+
+   If no bold file is configured, the regular file is used for both weights — this is visually acceptable for Hindi receipts.
+
+5. Set the environment variables in `backend/.env`:
+
+   ```bash
+   PDF_FONT_PATH=/opt/sakhisetu/fonts/NotoSansDevanagari-Regular.ttf
+   PDF_FONT_BOLD_PATH=/opt/sakhisetu/fonts/NotoSansDevanagari-SemiBold.ttf
+   ```
+
+   `PDF_FONT_BOLD_PATH` is optional; leave it empty or omit it to use the regular file for bold text.
+
+6. Restart the backend. Visit `GET /api/health` and then download any succeeded receipt to verify PDF rendering.
+
+**Latin-only deployments** (where all donor names, `TRUST_NAME`, and `TRUST_ADDRESS` are in English/Latin script): leave `PDF_FONT_PATH` and `PDF_FONT_BOLD_PATH` empty. PDFKit's built-in Helvetica is used automatically and no font file is needed.
+
+**Font file permissions**: ensure the Node.js process has read access to the font files. On Linux this is typically `chmod 644`.
+
+**Containerised deployments**: copy font files into the container image or mount them as a volume. Example Dockerfile fragment:
+
+```dockerfile
+COPY fonts/NotoSansDevanagari-Regular.ttf /opt/fonts/
+ENV PDF_FONT_PATH=/opt/fonts/NotoSansDevanagari-Regular.ttf
+```
 
 ## Verification commands
 

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import PDFDocument from "pdfkit";
 import { DonationFrequency, DonationStatus, Prisma, UserRole } from "@prisma/client";
 import { env } from "../config/env.js";
 import { prisma } from "../config/prisma.js";
 import { decryptPan, deriveReceiptToken, encryptPan, safeEqualHex, sha256 } from "../utils/crypto.js";
+import { registerPdfFonts, selectPdfFonts } from "../utils/pdf-fonts.js";
 import { formatReceiptNumber, requestFingerprint } from "./donation-helpers.js";
 import { AppError } from "../utils/errors.js";
 
@@ -203,19 +203,33 @@ export async function receiptPdf(receiptId: string, user: SessionUser, downloadT
 
   const donation = receipt.donation;
   const pan = decryptPan(donation.donorPanCipher);
-  const needsDevanagari = [donation.donorName, env.TRUST_NAME, env.TRUST_ADDRESS]
-    .some((value) => /\p{Script=Devanagari}/u.test(value));
-  const unicodeFontPath = env.PDF_FONT_PATH.trim();
-  if (unicodeFontPath && !existsSync(unicodeFontPath)) {
-    throw new AppError(503, "PDF_FONT_NOT_FOUND", "The configured PDF_FONT_PATH does not exist on this server.");
+
+  // Determine font configuration — returns an error descriptor if Devanagari
+  // content is present without a font path, or if a configured path is missing.
+  const fontResult = selectPdfFonts(
+    [donation.donorName, env.TRUST_NAME, env.TRUST_ADDRESS],
+    env.PDF_FONT_PATH,
+    env.PDF_FONT_BOLD_PATH,
+  );
+  if ("error" in fontResult) {
+    const e = fontResult.error;
+    if (e.code === "PDF_FONT_NOT_FOUND") {
+      throw new AppError(503, "PDF_FONT_NOT_FOUND",
+        `The PDF font file configured in PDF_FONT_PATH does not exist: ${e.path}`);
+    }
+    // PDF_UNICODE_FONT_REQUIRED
+    const preview = e.triggerString.slice(0, 40);
+    throw new AppError(503, "PDF_UNICODE_FONT_REQUIRED",
+      `The receipt contains Devanagari text ("${preview}") that cannot be rendered with the built-in PDF fonts. ` +
+      `Set PDF_FONT_PATH to the absolute path of a Noto Sans Devanagari TTF font file on this server. ` +
+      `Download: https://fonts.google.com/noto/specimen/Noto+Sans+Devanagari`);
   }
-  if (needsDevanagari && !unicodeFontPath) {
-    throw new AppError(503, "PDF_UNICODE_FONT_REQUIRED", "Set PDF_FONT_PATH to a Noto Sans Devanagari TTF font to render this donor name in the receipt PDF.");
-  }
+  const fontConfig = fontResult.config;
+
   const doc = new PDFDocument({ size: "A4", margin: 52, info: { Title: `SakhiSetu 80G preview ${receipt.receiptNumber}`, Author: env.TRUST_NAME } });
-  if (unicodeFontPath) doc.registerFont("SakhiUnicode", unicodeFontPath);
-  const pdfFont = unicodeFontPath ? "SakhiUnicode" : "Helvetica";
-  const pdfBoldFont = unicodeFontPath ? "SakhiUnicode" : "Helvetica-Bold";
+  registerPdfFonts(doc, fontConfig, env.PDF_FONT_PATH, env.PDF_FONT_BOLD_PATH);
+  const pdfFont = fontConfig.regular;
+  const pdfBoldFont = fontConfig.bold;
   const chunks: Buffer[] = [];
   const bufferPromise = new Promise<Buffer>((resolve, reject) => {
     doc.on("data", (chunk: Buffer) => chunks.push(chunk));

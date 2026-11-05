@@ -24,6 +24,7 @@ const envSchema = z.object({
   GEMINI_API_KEY: z.string().optional().default(""),
   GEMINI_MODEL: z.string().default("gemini-3.5-flash"),
   PDF_FONT_PATH: z.string().default(""),
+  PDF_FONT_BOLD_PATH: z.string().default(""),
   PII_ENCRYPTION_KEY: z.string().default(""),
   TRUST_NAME: z.string().default("SakhiSetu Demo Trust"),
   TRUST_ADDRESS: z.string().default("Bhopal, Madhya Pradesh"),
