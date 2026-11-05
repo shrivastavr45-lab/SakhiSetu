@@ -58,6 +58,10 @@ export type Scheme = {
   aiSummaryDraftHi?: string | null;
   aiSummaryApproved?: boolean;
   officialNoticeText?: string | null;
+  // Import-source metadata
+  myschemeSlug?: string | null;
+  level?: string | null;
+  myschemeUrl?: string | null;
 };
 
 export type Campaign = {

@@ -64,11 +64,18 @@ model Scheme {
   aiSummaryDraftHi   String?
   aiSummaryApproved  Boolean  @default(false)
   aiSummaryUpdatedAt DateTime?
+  /// Deduplication key from the myScheme portal slug (e.g. "pm-kisan"). Null for manually-created schemes.
+  myschemeSlug       String?  @unique
+  /// Government level: "Central Government" or "State Government". Null for manually-created schemes.
+  level              String?
+  /// Canonical myScheme portal page URL for traceability.
+  myschemeUrl        String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
   @@index([published, need])
   @@index([lastCheckedAt])
+  @@index([level])
 }
 
 model Campaign {

@@ -12,6 +12,9 @@ export function presentScheme(scheme: {
   sourceUrl: string | null; lastCheckedAt: Date | null; published: boolean; aiSummaryDraftHi?: string | null;
   aiSummaryApproved?: boolean;
   officialNoticeText?: string | null;
+  myschemeSlug?: string | null;
+  level?: string | null;
+  myschemeUrl?: string | null;
 }, includeEditorialFields = false) {
   return {
     id: scheme.id,
@@ -29,6 +32,11 @@ export function presentScheme(scheme: {
     sourceUrl: scheme.sourceUrl,
     lastCheckedAt: scheme.lastCheckedAt?.toISOString() ?? null,
     published: scheme.published,
+    // Import-sourced metadata — always included so the admin UI and API clients
+    // can display the origin of a scheme without needing an editorial flag.
+    myschemeSlug: scheme.myschemeSlug ?? null,
+    level: scheme.level ?? null,
+    myschemeUrl: scheme.myschemeUrl ?? null,
     ...(includeEditorialFields && scheme.aiSummaryDraftHi !== undefined ? { aiSummaryDraftHi: scheme.aiSummaryDraftHi } : {}),
     ...(includeEditorialFields && scheme.aiSummaryApproved !== undefined ? { aiSummaryApproved: scheme.aiSummaryApproved } : {}),
     ...(includeEditorialFields && scheme.officialNoticeText !== undefined ? { officialNoticeText: scheme.officialNoticeText } : {}),
@@ -59,6 +67,7 @@ export async function createScheme(input: {
   eligibility?: Localized[]; documents?: Localized[]; steps?: Localized[]; rules?: Record<string, unknown>;
   districts?: "all" | string[]; sourceUrl?: string | null; officialNoticeText?: string | null;
   published?: boolean; lastCheckedAt?: string | Date | null;
+  myschemeSlug?: string | null; level?: string | null; myschemeUrl?: string | null;
 }) {
   const id = input.id ?? `scheme-${randomUUID().slice(0, 8)}`;
   const lastChecked = input.lastCheckedAt ? new Date(input.lastCheckedAt) : (input.sourceUrl ? new Date() : null);
@@ -84,6 +93,9 @@ export async function createScheme(input: {
       officialNoticeText: input.officialNoticeText ?? null,
       lastCheckedAt: lastChecked,
       published: input.published ?? false,
+      myschemeSlug: input.myschemeSlug?.trim() || null,
+      level: input.level?.trim() || null,
+      myschemeUrl: input.myschemeUrl?.trim() || null,
     },
   });
   return presentScheme(row, true);
@@ -94,13 +106,14 @@ export async function updateScheme(id: string, input: {
   eligibility?: Localized[]; documents?: Localized[]; steps?: Localized[]; rules?: Record<string, unknown>;
   districts?: "all" | string[]; sourceUrl?: string | null; officialNoticeText?: string | null; published?: boolean;
   lastCheckedAt?: string | Date | null;
+  myschemeSlug?: string | null; level?: string | null; myschemeUrl?: string | null;
 }) {
   const current = await prisma.scheme.findUnique({ where: { id } });
   if (!current) throw new AppError(404, "SCHEME_NOT_FOUND", "Scheme not found.");
   if (input.published === true && current.aiSummaryDraftHi && !current.aiSummaryApproved) {
     throw new AppError(409, "AI_SUMMARY_REVIEW_REQUIRED", "Review and approve the pending Hindi AI summary before publishing this scheme.");
   }
-  const { name, dept, short, benefit, eligibility, documents, steps, rules, districts, code, lastCheckedAt, ...rest } = input;
+  const { name, dept, short, benefit, eligibility, documents, steps, rules, districts, code, lastCheckedAt, myschemeSlug, level, myschemeUrl, ...rest } = input;
   const computedLastChecked = lastCheckedAt !== undefined
     ? (lastCheckedAt ? new Date(lastCheckedAt) : null)
     : (input.sourceUrl !== undefined ? (input.sourceUrl ? new Date() : null) : undefined);
@@ -120,6 +133,9 @@ export async function updateScheme(id: string, input: {
       ...(steps ? { steps: steps as Prisma.InputJsonValue } : {}),
       ...(rules ? { rules: rules as Prisma.InputJsonValue } : {}),
       ...(districts ? { districts: districts as Prisma.InputJsonValue } : {}),
+      ...(myschemeSlug !== undefined ? { myschemeSlug: myschemeSlug?.trim() || null } : {}),
+      ...(level !== undefined ? { level: level?.trim() || null } : {}),
+      ...(myschemeUrl !== undefined ? { myschemeUrl: myschemeUrl?.trim() || null } : {}),
       ...(((input.short !== undefined && (input.short.hi !== current.shortHi || input.short.en !== current.shortEn)) ||
         (input.officialNoticeText !== undefined && input.officialNoticeText !== current.officialNoticeText))
         ? { aiSummaryApproved: false }

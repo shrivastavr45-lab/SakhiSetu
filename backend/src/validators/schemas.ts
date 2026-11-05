@@ -84,6 +84,10 @@ export const createSchemeSchema = z.object({
   officialNoticeText: z.string().max(30000).optional().nullable(),
   lastCheckedAt: z.string().datetime().optional().nullable(),
   published: z.boolean().optional(),
+  // Import-source metadata (populated by the CSV import pipeline; null for manually-created schemes)
+  myschemeSlug: z.string().trim().min(1).max(200).optional().nullable(),
+  level: z.enum(["Central Government", "State Government"]).optional().nullable(),
+  myschemeUrl: z.string().url().max(2048).optional().nullable(),
 }).strict();
 
 export const updateSchemeSchema = createSchemeSchema.omit({ id: true }).partial().extend({
