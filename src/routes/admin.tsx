@@ -44,6 +44,11 @@ import {
   getAdminDonorDonations,
   getAdminReceipts,
   downloadReceipt,
+  getAdminReportSummary,
+  downloadForm10BdCsv,
+  getAuditLog,
+  getHomepageBanner,
+  updateHomepageBanner,
   createAdminScheme,
   updateAdminScheme,
   deleteAdminScheme,
@@ -58,6 +63,8 @@ import {
   type AdminDonorSummary,
   type AdminDonorDonation,
   type AdminReceipt,
+  type AdminReportSummary,
+  type AuditLogRow,
   type SessionUser,
 } from "@/lib/api";
 
@@ -123,14 +130,12 @@ const NAV_ITEMS: NavItem[] = [
     icon: BarChart3,
     label: { hi: "रिपोर्ट्स व विश्लेषण", en: "Reports & Analytics" },
     description: { hi: "मासिक संग्रह, अभियान रिपोर्ट व Form 10BD प्रारूप", en: "Financial summaries, analytics & Form 10BD export" },
-    checkpoint: "Checkpoint 6",
   },
   {
     id: "settings",
     icon: Settings,
     label: { hi: "ट्रस्ट सेटिंग्स", en: "Settings" },
     description: { hi: "होमपेज सूचना पट्टी, ऑडिट लॉग व ट्रस्ट विवरण", en: "Trust banner, audit trail & configuration" },
-    checkpoint: "Checkpoint 6",
   },
 ];
 
@@ -171,6 +176,16 @@ function AdminDashboard() {
   const [receipts, setReceipts] = useState<AdminReceipt[]>([]);
   const [loadingReceipts, setLoadingReceipts] = useState(false);
   const [receiptsError, setReceiptsError] = useState<string | null>(null);
+
+  // Reports states
+  const [reportSummary, setReportSummary] = useState<AdminReportSummary | null>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+
+  // Settings states (banner)
+  const [bannerText, setBannerText] = useState<string>("");
+  const [loadingBanner, setLoadingBanner] = useState(false);
+  const [bannerError, setBannerError] = useState<string | null>(null);
 
   // Login form states
   const [loginEmail, setLoginEmail] = useState("admin@sakhisetu.test");
@@ -280,6 +295,34 @@ function AdminDashboard() {
     }
   };
 
+  // Fetch report summary
+  const fetchReport = async () => {
+    setLoadingReport(true);
+    setReportError(null);
+    try {
+      const data = await getAdminReportSummary();
+      setReportSummary(data);
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : "Failed to load report summary.");
+    } finally {
+      setLoadingReport(false);
+    }
+  };
+
+  // Fetch homepage banner
+  const fetchBanner = async () => {
+    setLoadingBanner(true);
+    setBannerError(null);
+    try {
+      const data = await getHomepageBanner();
+      setBannerText(typeof data.text === "string" ? data.text : "");
+    } catch (err) {
+      setBannerError(err instanceof Error ? err.message : "Failed to load banner.");
+    } finally {
+      setLoadingBanner(false);
+    }
+  };
+
   useEffect(() => {
     if (user?.role === "ADMIN") {
       void fetchOverview();
@@ -288,6 +331,8 @@ function AdminDashboard() {
       void fetchDonations();
       void fetchDonors();
       void fetchReceipts();
+      void fetchReport();
+      void fetchBanner();
     }
   }, [user]);
 
@@ -327,6 +372,8 @@ function AdminDashboard() {
       setDonations([]);
       setDonors([]);
       setReceipts([]);
+      setReportSummary(null);
+      setBannerText("");
       setBusyKey(null);
     }
   };
@@ -591,6 +638,17 @@ function AdminDashboard() {
                 <span>{t({ hi: "रसीद सूची ताज़ा करें", en: "Refresh Receipts" })}</span>
               </button>
             )}
+
+            {activeNav === "reports" && (
+              <button
+                onClick={() => void fetchReport()}
+                disabled={loadingReport}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border bg-card text-xs font-semibold hover:bg-muted disabled:opacity-50"
+              >
+                <RefreshCw className={`size-3.5 ${loadingReport ? "animate-spin" : ""}`} />
+                <span>{t({ hi: "रिपोर्ट ताज़ा करें", en: "Refresh Report" })}</span>
+              </button>
+            )}
           </div>
 
           {/* Feedback message banner */}
@@ -671,13 +729,31 @@ function AdminDashboard() {
             />
           )}
 
-          {/* SECTIONS 7-8: UPCOMING CHECKPOINTS ROADMAP */}
-          {activeNav !== "overview" && activeNav !== "schemes" && activeNav !== "campaigns" && activeNav !== "donations" && activeNav !== "donors" && activeNav !== "receipts" && (
-            <CheckpointRoadmapSection
-              navItem={currentNav}
-              onBackToOverview={() => setActiveNav("overview")}
+          {/* SECTION 7: REPORTS & ANALYTICS */}
+          {activeNav === "reports" && (
+            <ReportsSection
+              summary={reportSummary}
+              loading={loadingReport}
+              error={reportError}
+              onReload={fetchReport}
             />
           )}
+
+          {/* SECTION 8: SETTINGS */}
+          {activeNav === "settings" && (
+            <SettingsSection
+              bannerText={bannerText}
+              setBannerText={setBannerText}
+              loadingBanner={loadingBanner}
+              bannerError={bannerError}
+              onBannerSaved={(text) => {
+                setBannerText(text);
+                setFeedback(t({ hi: "होमपेज बैनर सफलतापूर्वक अपडेट किया गया।", en: "Homepage banner updated successfully." }));
+              }}
+            />
+          )}
+
+          {/* NO MORE ROADMAP PLACEHOLDERS — all 8 sections implemented */}
         </main>
       </div>
     </div>
@@ -3832,6 +3908,411 @@ function OverviewSection({
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// REPORTS SECTION (CHECKPOINT 7)
+// -------------------------------------------------------------
+
+function ReportsSection({
+  summary,
+  loading,
+  error,
+  onReload,
+}: {
+  summary: AdminReportSummary | null;
+  loading: boolean;
+  error: string | null;
+  onReload: () => Promise<void>;
+}) {
+  const { t } = useLang();
+  const [exportingCsv, setExportingCsv] = useState(false);
+  const [csvError, setCsvError] = useState<string | null>(null);
+
+  const handleExportCsv = async () => {
+    if (!summary) return;
+    setExportingCsv(true);
+    setCsvError(null);
+    try {
+      const blob = await downloadForm10BdCsv(summary.financialYear);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `SakhiSetu-Form10BD-DEMO-${summary.financialYear}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setCsvError(err instanceof Error ? err.message : "CSV export failed.");
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
+  const maxMonthlyAmount = summary ? Math.max(...summary.monthly.map((m) => m.amount), 1) : 1;
+
+  return (
+    <div className="space-y-6">
+      {/* Demo disclaimer — always visible */}
+      <div className="rounded-xl border border-turmeric/40 bg-turmeric/10 px-4 py-3 text-xs text-foreground flex items-start gap-2">
+        <AlertCircle className="size-4 shrink-0 mt-0.5 text-turmeric" />
+        <div className="space-y-1">
+          <p className="font-semibold">
+            {t({ hi: "परीक्षण मोड — सभी आँकड़े MOCK लेन-देन से हैं", en: "Test mode — all figures are from MOCK transactions" })}
+          </p>
+          <p>
+            {t({
+              hi: "यह रिपोर्ट वास्तविक धन संग्रह नहीं दर्शाती। Form 10BD CSV केवल डेमो टेम्पलेट है और कर दाखिल करने के लिए अमान्य है।",
+              en: "This report does not represent real funds. Form 10BD CSV is a demo template and invalid for tax filing.",
+            })}
+          </p>
+        </div>
+      </div>
+
+      {/* Error state */}
+      {error && (
+        <div role="alert" className="card-soft p-4 border-destructive/20 bg-destructive/5 text-destructive flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm">
+            <AlertCircle className="size-5 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button onClick={() => void onReload()} className="btn-big !min-h-8 bg-destructive text-destructive-foreground text-xs">
+            {t({ hi: "पुनः लोड करें", en: "Reload" })}
+          </button>
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading && !summary && (
+        <div className="card-soft p-12 text-center">
+          <div className="inline-block size-8 animate-spin rounded-full border-3 border-primary border-t-transparent" />
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t({ hi: "रिपोर्ट डेटा लोड हो रहा है…", en: "Loading report data from database…" })}
+          </p>
+        </div>
+      )}
+
+      {summary && (
+        <>
+          {/* Summary metrics */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="card-soft p-4 border-l-4 border-l-leaf">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t({ hi: "कुल संग्रह (TEST)", en: "Total Collected (TEST)" })}</p>
+              <p className="font-display text-2xl mt-1 text-leaf">{inr(summary.totalSucceededAmount)}</p>
+              <p className="text-xs text-muted-foreground">{summary.totalSucceededCount} {t({ hi: "सफल", en: "succeeded" })}</p>
+            </div>
+            <div className="card-soft p-4 border-l-4 border-l-primary">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t({ hi: "अद्वितीय दानदाता", en: "Unique Donors" })}</p>
+              <p className="font-display text-2xl mt-1">{summary.uniqueDonorEmails}</p>
+              <p className="text-xs text-muted-foreground">{t({ hi: "ईमेल द्वारा", en: "by email" })}</p>
+            </div>
+            <div className="card-soft p-4 border-l-4 border-l-turmeric">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t({ hi: "एकमुश्त / मासिक", en: "One-time / Monthly" })}</p>
+              <p className="font-display text-2xl mt-1">{summary.oneTimeDonations} / {summary.monthlyIntentions}</p>
+              <p className="text-xs text-muted-foreground">{t({ hi: "मासिक = इरादा मात्र", en: "monthly = intention only" })}</p>
+            </div>
+            <div className="card-soft p-4 border-l-4 border-l-destructive/50">
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t({ hi: "विफल / लंबित", en: "Failed / Pending" })}</p>
+              <p className="font-display text-2xl mt-1 text-destructive">{summary.totalFailedCount}</p>
+              <p className="text-xs text-muted-foreground">{summary.totalPendingCount} {t({ hi: "लंबित", en: "pending" })}</p>
+            </div>
+          </div>
+
+          {/* Monthly trends (12 months) */}
+          <div className="card-soft p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-display text-xl">{t({ hi: "मासिक दान (विगत 12 माह)", en: "Monthly Donations (Past 12 Months)" })}</h2>
+              <span className="text-xs text-muted-foreground">{t({ hi: "सफल दान केवल", en: "Succeeded only" })}</span>
+            </div>
+            <div className="space-y-2.5">
+              {summary.monthly.map((m) => {
+                const pct = Math.max(2, Math.round((m.amount / maxMonthlyAmount) * 100));
+                return (
+                  <div key={m.monthKey} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-foreground w-24 shrink-0">{m.monthLabel}</span>
+                      <div className="flex-1 mx-3">
+                        <div className="h-4 w-full bg-muted rounded-full overflow-hidden">
+                          <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                      <span className="font-mono text-right w-28 shrink-0">{inr(m.amount)} <span className="text-muted-foreground">({m.count})</span></span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Per-campaign breakdown */}
+          <div className="card-soft p-5">
+            <h2 className="font-display text-xl mb-4">{t({ hi: "अभियान-वार संग्रह", en: "Collection by Campaign" })}</h2>
+            <div className="space-y-4">
+              {summary.byCampaign.map((c) => (
+                <div key={c.id} className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg" aria-hidden>{c.emoji}</span>
+                      <span className="font-semibold text-sm">{t(c.title)}</span>
+                      <span className="text-[10px] rounded bg-muted px-1.5 py-0.5 text-muted-foreground capitalize">{c.district}</span>
+                      {!c.active && <span className="text-[10px] rounded bg-destructive/10 text-destructive px-1.5 py-0.5">{t({ hi: "निष्क्रिय", en: "Inactive" })}</span>}
+                    </div>
+                    <span className="text-xs font-semibold">{c.progressPercent}%</span>
+                  </div>
+                  <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-leaf rounded-full" style={{ width: `${Math.max(c.progressPercent, 2)}%` }} />
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>{t({ hi: "एकत्रित:", en: "Raised:" })} <strong className="text-leaf">{inr(c.collectedAmount)}</strong> ({c.donationCount} {t({ hi: "दान", en: "donations" })})</span>
+                    <span>{t({ hi: "लक्ष्य:", en: "Goal:" })} {inr(c.goalAmount)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Form 10BD export */}
+          <div className="card-soft p-5 space-y-4">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="font-display text-xl">{t({ hi: "Form 10BD — डेमो CSV", en: "Form 10BD — Demo CSV Export" })}</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {t({ hi: `वित्त वर्ष ${summary.financialYear} के सफल दान का टेम्पलेट`, en: `Template for FY ${summary.financialYear} succeeded donations` })}
+                </p>
+              </div>
+              <button
+                onClick={() => void handleExportCsv()}
+                disabled={exportingCsv}
+                className="btn-big !min-h-10 bg-primary text-primary-foreground disabled:opacity-50 flex items-center gap-2"
+              >
+                <Save className="size-4" />
+                <span>{exportingCsv ? t({ hi: "बन रही है…", en: "Generating…" }) : t({ hi: "CSV डाउनलोड करें", en: "Download CSV" })}</span>
+              </button>
+            </div>
+
+            {csvError && (
+              <div role="alert" className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive">{csvError}</div>
+            )}
+
+            <div className="rounded-xl bg-turmeric/10 border border-turmeric/30 p-4 text-xs space-y-1.5 text-foreground">
+              <p className="font-semibold">{t({ hi: "⚠️ डेमो सीमाएँ — दाखिल करने से पहले पढ़ें:", en: "⚠️ Demo limitations — read before filing:" })}</p>
+              {summary.disclaimers.map((d, i) => <p key={i}>• {d}</p>)}
+              <p>• {t({ hi: "Form 10BD CSV में Trust PAN और 80G पंजीकरण शामिल हैं — सत्यापित करें कि ये सही हैं।", en: "The Form 10BD CSV includes Trust PAN and 80G registration — verify these are correct before any use." })}</p>
+            </div>
+
+            <div className="text-xs text-muted-foreground border-t pt-3">
+              {t({
+                hi: "CSV में प्रत्येक पंक्ति के साथ स्पष्ट DEMO / TEST चेतावनी होती है। यह फ़ाइल आयकर विभाग को सीधे जमा नहीं की जा सकती।",
+                en: "Every row in the CSV carries explicit DEMO / TEST warnings. This file cannot be submitted directly to the Income Tax Department.",
+              })}
+            </div>
+          </div>
+
+          {/* Metadata */}
+          <p className="text-xs text-muted-foreground text-right">
+            {t({ hi: "रिपोर्ट उत्पन्न:", en: "Report generated:" })} {new Date(summary.generatedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })} IST
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// SETTINGS SECTION (CHECKPOINT 7 / CP8)
+// -------------------------------------------------------------
+
+function SettingsSection({
+  bannerText,
+  setBannerText,
+  loadingBanner,
+  bannerError,
+  onBannerSaved,
+}: {
+  bannerText: string;
+  setBannerText: (t: string) => void;
+  loadingBanner: boolean;
+  bannerError: string | null;
+  onBannerSaved: (text: string) => void;
+}) {
+  const { t } = useLang();
+  const [savingBanner, setSavingBanner] = useState(false);
+  const [bannerSaveError, setBannerSaveError] = useState<string | null>(null);
+
+  // Audit log
+  const [auditRows, setAuditRows] = useState<AuditLogRow[]>([]);
+  const [loadingAudit, setLoadingAudit] = useState(true);
+  const [auditError, setAuditError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoadingAudit(true);
+    setAuditError(null);
+    getAuditLog(50)
+      .then((rows) => { if (active) setAuditRows(rows); })
+      .catch((err: unknown) => { if (active) setAuditError(err instanceof Error ? err.message : "Failed to load audit log."); })
+      .finally(() => { if (active) setLoadingAudit(false); });
+    return () => { active = false; };
+  }, []);
+
+  const handleSaveBanner = async () => {
+    setSavingBanner(true);
+    setBannerSaveError(null);
+    try {
+      const result = await updateHomepageBanner(bannerText);
+      onBannerSaved(result.text);
+    } catch (err) {
+      setBannerSaveError(err instanceof Error ? err.message : "Failed to save banner.");
+    } finally {
+      setSavingBanner(false);
+    }
+  };
+
+  return (
+    <div className="space-y-8">
+      {/* Homepage banner editor */}
+      <div className="card-soft p-5 space-y-4">
+        <div>
+          <h2 className="font-display text-xl">{t({ hi: "होमपेज सूचना बैनर", en: "Homepage Notice Banner" })}</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {t({ hi: "यह संदेश साइट के शीर्ष पर सार्वजनिक उपयोगकर्ताओं को दिखाई देता है।", en: "This message is shown to public users at the top of the site." })}
+          </p>
+        </div>
+
+        {loadingBanner && (
+          <div className="h-10 bg-muted animate-pulse rounded-xl" />
+        )}
+
+        {!loadingBanner && (
+          <label className="flex flex-col gap-1.5 text-sm font-medium">
+            {t({ hi: "बैनर संदेश (खाली छोड़ें = कोई बैनर नहीं)", en: "Banner text (leave empty = no banner)" })}
+            <textarea
+              rows={3}
+              value={bannerText}
+              onChange={(e) => setBannerText(e.target.value)}
+              maxLength={1000}
+              placeholder={t({ hi: "जैसे: नई योजनाओं की जानकारी के लिए यहाँ क्लिक करें…", en: "e.g. Click here for latest scheme announcements…" })}
+              className="rounded-xl border bg-card p-3 text-sm focus:border-primary focus:outline-none"
+            />
+            <span className="text-xs text-muted-foreground font-normal text-right">{bannerText.length}/1000</span>
+          </label>
+        )}
+
+        {(bannerError || bannerSaveError) && (
+          <div role="alert" className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
+            {bannerError ?? bannerSaveError}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-3">
+          {bannerText && (
+            <button
+              onClick={() => setBannerText("")}
+              disabled={savingBanner}
+              className="btn-big !min-h-10 border bg-card text-sm"
+            >
+              {t({ hi: "बैनर हटाएं", en: "Clear Banner" })}
+            </button>
+          )}
+          <button
+            onClick={() => void handleSaveBanner()}
+            disabled={savingBanner || loadingBanner}
+            className="btn-big !min-h-10 bg-primary text-primary-foreground disabled:opacity-50 text-sm"
+          >
+            <Save className="size-4" />
+            <span>{savingBanner ? t({ hi: "सहेजा जा रहा है…", en: "Saving…" }) : t({ hi: "बैनर सहेजें", en: "Save Banner" })}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Audit log */}
+      <div className="card-soft p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display text-xl">{t({ hi: "ऑडिट लॉग (हाल की गतिविधियाँ)", en: "Audit Log (Recent Activity)" })}</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t({ hi: "प्रशासनिक क्रियाओं का रिकॉर्ड — नवीनतम 50 प्रविष्टियाँ।", en: "Record of administrative actions — latest 50 entries." })}
+            </p>
+          </div>
+          {loadingAudit && <div className="inline-block size-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />}
+        </div>
+
+        {auditError && (
+          <div role="alert" className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive">{auditError}</div>
+        )}
+
+        {!loadingAudit && !auditError && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-muted/70 text-[11px] text-muted-foreground uppercase font-semibold">
+                <tr>
+                  <th className="p-3">{t({ hi: "दिनांक व समय (IST)", en: "Date & Time (IST)" })}</th>
+                  <th className="p-3">{t({ hi: "क्रिया", en: "Action" })}</th>
+                  <th className="p-3">{t({ hi: "लक्ष्य", en: "Target" })}</th>
+                  <th className="p-3">{t({ hi: "प्रशासक", en: "Admin" })}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {auditRows.map((row) => (
+                  <tr key={row.id} className="hover:bg-muted/20">
+                    <td className="p-3 whitespace-nowrap text-muted-foreground">
+                      {new Date(row.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "short", timeStyle: "short" })}
+                    </td>
+                    <td className="p-3">
+                      <span className="rounded bg-primary/10 text-primary px-1.5 py-0.5 font-mono font-semibold">
+                        {row.action}
+                      </span>
+                    </td>
+                    <td className="p-3 text-muted-foreground">
+                      {row.targetType && <span className="rounded bg-muted px-1.5 py-0.5 mr-1">{row.targetType}</span>}
+                      {row.targetId && <span className="font-mono text-[10px]">{row.targetId.slice(0, 16)}{row.targetId.length > 16 ? "…" : ""}</span>}
+                      {!row.targetType && !row.targetId && "—"}
+                    </td>
+                    <td className="p-3 text-muted-foreground">{row.adminEmail}</td>
+                  </tr>
+                ))}
+                {auditRows.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-muted-foreground">
+                      {t({ hi: "अभी कोई ऑडिट प्रविष्टि नहीं है।", en: "No audit entries yet." })}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Trust environment info */}
+      <div className="card-soft p-5 space-y-3">
+        <h2 className="font-display text-xl">{t({ hi: "ट्रस्ट कॉन्फ़िगरेशन (केवल पढ़ने योग्य)", en: "Trust Configuration (read-only)" })}</h2>
+        <p className="text-xs text-muted-foreground">
+          {t({ hi: "ये मान backend/.env में सेट हैं। इन्हें बदलने के लिए सर्वर पर env फ़ाइल अपडेट करें और सर्विस रिस्टार्ट करें।", en: "These values are set in backend/.env. Edit the env file on the server and restart to change them." })}
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2 text-xs">
+          {([
+            { label: { hi: "ट्रस्ट नाम", en: "Trust Name" }, hint: { hi: "TRUST_NAME env var", en: "TRUST_NAME env var" } },
+            { label: { hi: "पता", en: "Address" }, hint: { hi: "TRUST_ADDRESS env var", en: "TRUST_ADDRESS env var" } },
+            { label: { hi: "PAN", en: "Trust PAN" }, hint: { hi: "TRUST_PAN env var", en: "TRUST_PAN env var" } },
+            { label: { hi: "80G पंजीकरण", en: "80G Registration" }, hint: { hi: "TRUST_80G_REGISTRATION env var", en: "TRUST_80G_REGISTRATION env var" } },
+          ] as const).map(({ label, hint }) => (
+            <div key={hint.en} className="rounded-lg bg-muted/60 px-3 py-2 flex justify-between gap-2">
+              <span className="font-semibold text-muted-foreground">{t(label)}</span>
+              <span className="font-mono text-muted-foreground/60 text-right italic text-[10px]">{t(hint)}</span>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          {t({
+            hi: "प्रोडक्शन में TRUST_PAN और 80G पंजीकरण placeholder नहीं होने चाहिए। ट्रस्ट के सत्यापित मान दर्ज करें।",
+            en: "In production, TRUST_PAN and 80G registration must not be placeholder values. Enter the trust's verified credentials.",
+          })}
+        </p>
       </div>
     </div>
   );

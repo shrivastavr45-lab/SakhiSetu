@@ -188,6 +188,64 @@ export const deleteAdminScheme = (id: string) => request<{ deleted: boolean }>(`
 export const updateAdminCampaign = (id: string, body: { goalAmount?: number; active?: boolean }) => request<Campaign>(`/admin/campaigns/${encodeURIComponent(id)}`, { method: "PATCH", body });
 export const getHomepageBanner = () => request<{ text: string | null }>("/settings/homepage-banner");
 export const updateHomepageBanner = (text: string) => request<{ text: string }>("/admin/settings/homepage-banner", { method: "PUT", body: { text } });
+export const getAuditLog = (limit = 50) => request<AuditLogRow[]>(`/admin/settings/audit-log?limit=${limit}`);
+
+export type AuditLogRow = {
+  id: string;
+  adminId: string | null;
+  adminEmail: string;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  details: Record<string, unknown> | null;
+  createdAt: string;
+};
+
+export type AdminReportSummary = {
+  generatedAt: string;
+  periodLabel: string;
+  financialYear: string;
+  totalSucceededAmount: number;
+  totalSucceededCount: number;
+  totalFailedCount: number;
+  totalPendingCount: number;
+  uniqueDonorEmails: number;
+  oneTimeDonations: number;
+  monthlyIntentions: number;
+  testModeOnly: true;
+  monthly: Array<{ monthKey: string; monthLabel: string; amount: number; count: number }>;
+  byCampaign: Array<{
+    id: string;
+    title: L;
+    emoji: string;
+    district: string;
+    active: boolean;
+    goalAmount: number;
+    collectedAmount: number;
+    donationCount: number;
+    progressPercent: number;
+  }>;
+  disclaimers: string[];
+};
+
+export const getAdminReportSummary = () => request<AdminReportSummary>("/admin/reports/summary");
+
+/** Downloads the Form 10BD demo CSV for the given financial year (e.g. "2026-27").
+ *  Returns a Blob; caller creates an object URL and triggers download. */
+export async function downloadForm10BdCsv(fy: string): Promise<Blob> {
+  const response = await fetch(`${API_BASE}/admin/reports/form-10bd.csv?fy=${encodeURIComponent(fy)}`, {
+    credentials: "include",
+  });
+  if (!response.ok) {
+    let message = `Form 10BD export failed (${response.status}).`;
+    try {
+      const payload = await response.json() as { error?: { message?: string } };
+      message = payload.error?.message ?? message;
+    } catch { /* keep status message */ }
+    throw new ApiError(response.status, "FORM_10BD_FAILED", message);
+  }
+  return response.blob();
+}
 export const askAssistant = (message: string, language: "hi" | "en") => request<{ answer: string; language: "hi" | "en" }>("/assistant", { method: "POST", body: { message, language } });
 export const draftSchemeSummary = (id: string) => request<{ schemeId: string; draft: string; status: string }>(`/admin/ai/schemes/${encodeURIComponent(id)}/summary-draft`, { method: "POST" });
 export const approveSchemeSummary = (id: string) => request<Scheme>(`/admin/ai/schemes/${encodeURIComponent(id)}/summary-approve`, { method: "POST" });

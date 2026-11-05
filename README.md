@@ -1,6 +1,6 @@
 # SakhiSetu
 
-Hindi-first scheme discovery and test-mode donation prototype for a charitable trust in Madhya Pradesh. The original TanStack Start frontend has been retained and connected to a separate Express API.
+Hindi-first scheme discovery and test-mode donation prototype for a charitable trust in Madhya Pradesh. The implemented core slice covers public scheme discovery, a deterministic eligibility finder, scheme administration with AI Hindi-summary draft/review, test-mode donations, donor account/history, receipt PDF downloads, an admin analytics dashboard with a Form 10BD demo CSV export, and a settings panel with banner editor and audit log. It is a test-mode prototype, not a live fundraising or legally valid tax-certificate system. No real payment gateway or external donor messaging provider is connected.
 
 ## Project layout
 

@@ -14,8 +14,8 @@
 | CP4 | Donations & transactions — search, filters, detail drawer | **Complete** |
 | CP5 | Donor records — aggregated per-user stats, history drawer | **Complete** |
 | CP6 | Receipts & certificates — list, search, PDF download, detail drawer | **Complete** |
-| CP7 | Reports & analytics | Upcoming |
-| CP8 | Settings — trust banner, audit log | Upcoming |
+| CP7 | Reports & analytics | **Complete** |
+| CP8 (Settings) | Settings — trust banner, audit log | **Complete** |
 
 ## Acceptance matrix
 
@@ -36,11 +36,11 @@
 | A13 | Persistent mock-data replacement | **Implemented** | Schemes, campaigns, donations, donors, receipts all served from PostgreSQL |
 | A14 | Input validation | **Implemented** | Zod request schemas on backend; form-side validation in all admin modals |
 | A15 | Central error handling | **Implemented** | Express async wrapper, AppError, Prisma error mapping, centralized errorHandler |
-| A16 | Backend test suite | **76/76 pass** | `node --experimental-strip-types --test backend/tests/*.test.mjs`: 76 tests, 0 failed. Covers eligibility, idempotency fingerprints, financial year / receipt formatting, donation status categorisation, donor aggregation / search / sort / PAN masking, receipt token derivation, access-control logic, safeEqualHex, sha256 |
+| A16 | Backend test suite | **121/121 pass** | Covers eligibility, idempotency, financial year / receipt formatting, donation status, donor aggregation / search / sort / PAN, receipt token derivation, access-control, safeEqualHex, sha256, PDF font selection, monthly-trend gap-fill, campaign breakdown, Form 10BD CSV, FY validation, disclaimer requirements |
 | A17 | Frontend and browser journeys | **Requires npm install + PostgreSQL** | All TypeScript passes; browser testing instructions provided in each checkpoint |
 | A18 | Security checks | **Source-reviewed** | JWT, HttpOnly cookie, ADMIN role guard, bcrypt, rate limits, Helmet, CORS, AES-256-GCM PAN encryption, timing-safe token comparison, strict Zod schemas, no committed real secrets |
 | A19 | Frontend/backend production builds | **Typechecks pass; runtime build untested** | Requires `npm install` and `node_modules/.bin/tsc -p backend/tsconfig.json` for compiled output |
-| A20 | Documentation | **Updated** | This file updated to reflect CP6 completion |
+| A20 | Documentation | **Updated** | IMPLEMENTATION_STATUS.md, README.md, deployment.md updated to reflect all 8 admin checkpoints complete |
 
 ## Checks executed
 
