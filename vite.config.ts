@@ -13,7 +13,7 @@ export default defineConfig({
   vite: {
     server: {
       proxy: {
-        "/api": { target: process.env.API_PROXY_TARGET ?? localEnv.API_PROXY_TARGET ?? "http://localhost:4000", changeOrigin: true },
+        "/api": { target: process.env["API_PROXY_TARGET"] ?? localEnv["API_PROXY_TARGET"] ?? "http://localhost:4000", changeOrigin: true },
       },
     },
   },

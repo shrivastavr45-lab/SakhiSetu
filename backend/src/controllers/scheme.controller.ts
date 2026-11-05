@@ -8,17 +8,26 @@ function queryString(value: unknown, maxLength = 100): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : undefined;
 }
 
+function requireParam(value: string | string[] | undefined, name = "id"): string {
+  const v = Array.isArray(value) ? value[0] : value;
+  if (typeof v !== "string") throw new AppError(400, "MISSING_PARAM", `Route parameter '${name}' is required.`);
+  return v;
+}
+
 export const listPublicSchemes: RequestHandler = async (req, res) => {
+  const q = queryString(req.query["q"]);
+  const need = queryString(req.query["need"], 30);
+  const district = queryString(req.query["district"], 50);
   const rows = await listSchemes({
-    q: queryString(req.query.q),
-    need: queryString(req.query.need, 30),
-    district: queryString(req.query.district, 50),
+    ...(q !== undefined ? { q } : {}),
+    ...(need !== undefined ? { need } : {}),
+    ...(district !== undefined ? { district } : {}),
   });
   res.json({ data: rows });
 };
 
 export const getPublicScheme: RequestHandler = async (req, res) => {
-  res.json({ data: await findScheme(req.params.id) });
+  res.json({ data: await findScheme(requireParam(req.params["id"])) });
 };
 
 export const listAdminSchemes: RequestHandler = async (_req, res) => {
@@ -43,7 +52,8 @@ export const createAdminScheme: RequestHandler = async (req, res) => {
 
 export const updateAdminScheme: RequestHandler = async (req, res) => {
   const admin = res.locals.user as { id: string; email: string } | undefined;
-  const result = await updateScheme(req.params.id, req.body);
+  const id = requireParam(req.params["id"]);
+  const result = await updateScheme(id, req.body);
   if (admin?.email) {
     const action = req.body.published !== undefined
       ? (req.body.published ? "SCHEME_PUBLISHED" : "SCHEME_UNPUBLISHED")
@@ -53,7 +63,7 @@ export const updateAdminScheme: RequestHandler = async (req, res) => {
       adminEmail: admin.email,
       action,
       targetType: "SCHEME",
-      targetId: result.id,
+      targetId: id,
       details: { nameHi: result.name.hi, published: result.published },
     }).catch((err) => console.error("Audit log error:", err));
   }
@@ -62,16 +72,17 @@ export const updateAdminScheme: RequestHandler = async (req, res) => {
 
 export const deleteAdminScheme: RequestHandler = async (req, res) => {
   const admin = res.locals.user as { id: string; email: string } | undefined;
-  const exists = await prisma.scheme.findUnique({ where: { id: req.params.id }, select: { id: true, nameHi: true } });
+  const id = requireParam(req.params["id"]);
+  const exists = await prisma.scheme.findUnique({ where: { id }, select: { id: true, nameHi: true } });
   if (!exists) throw new AppError(404, "SCHEME_NOT_FOUND", "Scheme not found.");
-  await prisma.scheme.delete({ where: { id: req.params.id } });
+  await prisma.scheme.delete({ where: { id } });
   if (admin?.email) {
     createAuditLog({
       adminId: admin.id,
       adminEmail: admin.email,
       action: "SCHEME_DELETED",
       targetType: "SCHEME",
-      targetId: req.params.id,
+      targetId: id,
       details: { nameHi: exists.nameHi },
     }).catch((err) => console.error("Audit log error:", err));
   }

@@ -27,6 +27,8 @@ type Rules = {
   firstChild?: boolean;
 };
 
+type BooleanRuleKey = "married" | "pregnant" | "hasDaughter" | "bpl" | "rural" | "widowed" | "shgMember" | "firstChild";
+
 export type EligibilityRuleKey = keyof Rules | "districtAvailability" | "needPreference";
 
 export type EligibilityMatch = {
@@ -65,7 +67,7 @@ export function evaluateEligibility(
     else unansweredRules.push("maxAge");
   }
 
-  const booleanFields: (keyof Rules)[] = [
+  const booleanFields: BooleanRuleKey[] = [
     "married", "pregnant", "hasDaughter", "bpl", "rural", "widowed", "shgMember", "firstChild",
   ];
   for (const field of booleanFields) {

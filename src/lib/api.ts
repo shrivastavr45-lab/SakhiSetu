@@ -1,7 +1,7 @@
 import type { Campaign, Profile, Scheme } from "./data";
 import type { L } from "./i18n";
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "/api";
+const API_BASE = (import.meta.env["VITE_API_BASE_URL"] as string | undefined)?.replace(/\/$/, "") ?? "/api";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -22,11 +22,12 @@ type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
+  const { body: _bodyRaw, ...restOptions } = options;
   const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
+    ...restOptions,
     headers,
     credentials: "include",
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
   });
 
   const contentType = response.headers.get("content-type") ?? "";
@@ -125,8 +126,45 @@ export async function downloadReceipt(receiptId: string, downloadToken?: string 
 }
 
 export const getMyDonations = () => request<DonationHistoryItem[]>("/donations/mine");
-export type AdminDonation = DonationHistoryItem & { donorName: string; donorEmail: string };
+export type AdminDonation = DonationHistoryItem & {
+  donorName: string;
+  donorEmail: string;
+  paidAt: string | null;
+  paymentReference: string;
+  donorPanLast4: string | null;
+};
 export const getAdminDonations = () => request<AdminDonation[]>("/admin/donations");
+
+export type AdminDonorSummary = {
+  userId: string;
+  name: string;
+  email: string;
+  panLast4: string | null;
+  totalAmount: number;
+  succeededCount: number;
+  pendingCount: number;
+  failedCount: number;
+  totalCount: number;
+  latestDonationAt: string | null;
+  campaignIds: string[];
+};
+
+export type AdminDonorDonation = {
+  id: string;
+  amount: number;
+  frequency: "ONE_TIME" | "MONTHLY";
+  status: "SUCCEEDED" | "PENDING" | "FAILED";
+  testMode: boolean;
+  paidAt: string | null;
+  paymentReference: string;
+  createdAt: string;
+  campaign: { id: string; title: L };
+  receipt: { id: string; receiptNumber: string } | null;
+};
+
+export const getAdminDonors = () => request<AdminDonorSummary[]>("/admin/donors");
+export const getAdminDonorDonations = (userId: string) =>
+  request<AdminDonorDonation[]>(`/admin/donors/${encodeURIComponent(userId)}/donations`);
 export const createAdminScheme = (body: Record<string, unknown> & { need: string; name: L }) => request<Scheme>("/admin/schemes", { method: "POST", body });
 export const updateAdminScheme = (id: string, body: Record<string, unknown>) => request<Scheme>(`/admin/schemes/${encodeURIComponent(id)}`, { method: "PATCH", body });
 export const deleteAdminScheme = (id: string) => request<{ deleted: boolean }>(`/admin/schemes/${encodeURIComponent(id)}`, { method: "DELETE" });

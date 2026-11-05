@@ -34,7 +34,11 @@ function SchemesPage() {
     let active = true;
     setLoading(true);
     setError(null);
-    getSchemes({ need, district: district || undefined, q: q.trim() || undefined })
+    getSchemes({
+        ...(need !== undefined ? { need } : {}),
+        ...(district ? { district } : {}),
+        ...(q.trim() ? { q: q.trim() } : {}),
+      })
       .then((rows) => { if (active) setList(rows); })
       .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "Could not load schemes."); })
       .finally(() => { if (active) setLoading(false); });

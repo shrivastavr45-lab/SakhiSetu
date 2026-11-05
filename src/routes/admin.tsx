@@ -21,7 +21,6 @@ import {
   Sparkles,
   Plus,
   Search,
-  Filter,
   CheckCircle2,
   Eye,
   EyeOff,
@@ -33,21 +32,29 @@ import {
   Save,
   Check,
 } from "lucide-react";
-import { DISTRICTS, NEEDS, inr, type Need, type Scheme } from "@/lib/data";
+import { DISTRICTS, NEEDS, inr, type Need, type Scheme, type Campaign } from "@/lib/data";
 import { useLang, type L } from "@/lib/i18n";
 import {
   getAdminOverview,
   getMe,
   getSchemes,
+  getCampaigns,
+  getAdminDonations,
+  getAdminDonors,
+  getAdminDonorDonations,
   createAdminScheme,
   updateAdminScheme,
   deleteAdminScheme,
+  updateAdminCampaign,
   draftSchemeSummary,
   approveSchemeSummary,
   dismissSchemeSummary,
   login,
   logout,
   type AdminOverviewData,
+  type AdminDonation,
+  type AdminDonorSummary,
+  type AdminDonorDonation,
   type SessionUser,
 } from "@/lib/api";
 
@@ -89,21 +96,18 @@ const NAV_ITEMS: NavItem[] = [
     icon: HeartHandshake,
     label: { hi: "अभियान प्रबंधन", en: "Manage Campaigns" },
     description: { hi: "सहायता अभियान, लक्ष्य व धन संग्रह स्थिति", en: "Charity campaigns, goals & live collections" },
-    checkpoint: "Checkpoint 3",
   },
   {
     id: "donations",
     icon: Receipt,
     label: { hi: "दान व लेन-देन", en: "Donations & Transactions" },
     description: { hi: "सफल, लंबित और विफल लेन-देन का विवरण", en: "Detailed donation records, filters & CSV export" },
-    checkpoint: "Checkpoint 4",
   },
   {
     id: "donors",
     icon: Users,
     label: { hi: "दानदाता रिकॉर्ड", en: "Donor Records" },
     description: { hi: "दानदाताओं की प्रोफ़ाइल, इतिहास व गोपनीय विवरण", en: "Donor profiles, history and authorized PAN view" },
-    checkpoint: "Checkpoint 5",
   },
   {
     id: "receipts",
@@ -145,6 +149,21 @@ function AdminDashboard() {
   const [loadingSchemes, setLoadingSchemes] = useState(false);
   const [schemesError, setSchemesError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+
+  // Campaign management states
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [loadingCampaigns, setLoadingCampaigns] = useState(false);
+  const [campaignsError, setCampaignsError] = useState<string | null>(null);
+
+  // Donations management states
+  const [donations, setDonations] = useState<AdminDonation[]>([]);
+  const [loadingDonations, setLoadingDonations] = useState(false);
+  const [donationsError, setDonationsError] = useState<string | null>(null);
+
+  // Donors management states
+  const [donors, setDonors] = useState<AdminDonorSummary[]>([]);
+  const [loadingDonors, setLoadingDonors] = useState(false);
+  const [donorsError, setDonorsError] = useState<string | null>(null);
 
   // Login form states
   const [loginEmail, setLoginEmail] = useState("admin@sakhisetu.test");
@@ -198,10 +217,55 @@ function AdminDashboard() {
     }
   };
 
+  // Fetch campaigns (including inactive)
+  const fetchCampaigns = async () => {
+    setLoadingCampaigns(true);
+    setCampaignsError(null);
+    try {
+      const data = await getCampaigns(true);
+      setCampaigns(data);
+    } catch (err) {
+      setCampaignsError(err instanceof Error ? err.message : "Failed to load campaigns.");
+    } finally {
+      setLoadingCampaigns(false);
+    }
+  };
+
+  // Fetch donations (all, up to 500)
+  const fetchDonations = async () => {
+    setLoadingDonations(true);
+    setDonationsError(null);
+    try {
+      const data = await getAdminDonations();
+      setDonations(data);
+    } catch (err) {
+      setDonationsError(err instanceof Error ? err.message : "Failed to load donations.");
+    } finally {
+      setLoadingDonations(false);
+    }
+  };
+
+  // Fetch donor records (registered donors with aggregated stats)
+  const fetchDonors = async () => {
+    setLoadingDonors(true);
+    setDonorsError(null);
+    try {
+      const data = await getAdminDonors();
+      setDonors(data);
+    } catch (err) {
+      setDonorsError(err instanceof Error ? err.message : "Failed to load donor records.");
+    } finally {
+      setLoadingDonors(false);
+    }
+  };
+
   useEffect(() => {
     if (user?.role === "ADMIN") {
       void fetchOverview();
       void fetchSchemes();
+      void fetchCampaigns();
+      void fetchDonations();
+      void fetchDonors();
     }
   }, [user]);
 
@@ -237,6 +301,9 @@ function AdminDashboard() {
       setUser(null);
       setOverview(null);
       setSchemes([]);
+      setCampaigns([]);
+      setDonations([]);
+      setDonors([]);
       setBusyKey(null);
     }
   };
@@ -457,6 +524,39 @@ function AdminDashboard() {
                 <span>{t({ hi: "योजना सूची ताज़ा करें", en: "Refresh Schemes" })}</span>
               </button>
             )}
+
+            {activeNav === "campaigns" && (
+              <button
+                onClick={() => void fetchCampaigns()}
+                disabled={loadingCampaigns}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border bg-card text-xs font-semibold hover:bg-muted disabled:opacity-50"
+              >
+                <RefreshCw className={`size-3.5 ${loadingCampaigns ? "animate-spin" : ""}`} />
+                <span>{t({ hi: "अभियान सूची ताज़ा करें", en: "Refresh Campaigns" })}</span>
+              </button>
+            )}
+
+            {activeNav === "donations" && (
+              <button
+                onClick={() => void fetchDonations()}
+                disabled={loadingDonations}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border bg-card text-xs font-semibold hover:bg-muted disabled:opacity-50"
+              >
+                <RefreshCw className={`size-3.5 ${loadingDonations ? "animate-spin" : ""}`} />
+                <span>{t({ hi: "लेन-देन सूची ताज़ा करें", en: "Refresh Transactions" })}</span>
+              </button>
+            )}
+
+            {activeNav === "donors" && (
+              <button
+                onClick={() => void fetchDonors()}
+                disabled={loadingDonors}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border bg-card text-xs font-semibold hover:bg-muted disabled:opacity-50"
+              >
+                <RefreshCw className={`size-3.5 ${loadingDonors ? "animate-spin" : ""}`} />
+                <span>{t({ hi: "दानदाता सूची ताज़ा करें", en: "Refresh Donors" })}</span>
+              </button>
+            )}
           </div>
 
           {/* Feedback message banner */}
@@ -495,14 +595,1322 @@ function AdminDashboard() {
             />
           )}
 
-          {/* SECTIONS 3-8: UPCOMING CHECKPOINTS ROADMAP */}
-          {activeNav !== "overview" && activeNav !== "schemes" && (
+          {/* SECTION 3: CAMPAIGN MANAGEMENT */}
+          {activeNav === "campaigns" && (
+            <CampaignsSection
+              campaigns={campaigns}
+              loading={loadingCampaigns}
+              error={campaignsError}
+              onReload={fetchCampaigns}
+              onSyncOverview={fetchOverview}
+              setFeedback={setFeedback}
+            />
+          )}
+
+          {/* SECTION 4: DONATIONS & TRANSACTIONS */}
+          {activeNav === "donations" && (
+            <DonationsSection
+              donations={donations}
+              loading={loadingDonations}
+              error={donationsError}
+              onReload={fetchDonations}
+            />
+          )}
+
+          {/* SECTION 5: DONOR RECORDS */}
+          {activeNav === "donors" && (
+            <DonorsSection
+              donors={donors}
+              loading={loadingDonors}
+              error={donorsError}
+              onReload={fetchDonors}
+            />
+          )}
+
+          {/* SECTIONS 6-8: UPCOMING CHECKPOINTS ROADMAP */}
+          {activeNav !== "overview" && activeNav !== "schemes" && activeNav !== "campaigns" && activeNav !== "donations" && activeNav !== "donors" && (
             <CheckpointRoadmapSection
               navItem={currentNav}
               onBackToOverview={() => setActiveNav("overview")}
             />
           )}
         </main>
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// DONORS SECTION (CHECKPOINT 5)
+// -------------------------------------------------------------
+
+type DonorSortKey = "name" | "totalAmount" | "totalCount" | "latestDonationAt";
+
+function DonorsSection({
+  donors,
+  loading,
+  error,
+  onReload,
+}: {
+  donors: AdminDonorSummary[];
+  loading: boolean;
+  error: string | null;
+  onReload: () => Promise<void>;
+}) {
+  const { t } = useLang();
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<DonorSortKey>("latestDonationAt");
+  const [sortAsc, setSortAsc] = useState(false);
+  const [detailDonor, setDetailDonor] = useState<AdminDonorSummary | null>(null);
+
+  // Computed metrics
+  const totalDonors = donors.length;
+  const activeDonors = donors.filter((d) => d.succeededCount > 0).length;
+  const totalSucceeded = donors.reduce((s, d) => s + d.totalAmount, 0);
+  const monthlyDonors = donors.filter((d) => d.succeededCount > 1).length;
+
+  // Filter + sort
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const rows = q
+      ? donors.filter((d) => d.name.toLowerCase().includes(q) || d.email.toLowerCase().includes(q))
+      : donors.slice();
+
+    rows.sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "name") {
+        cmp = a.name.localeCompare(b.name, "hi");
+      } else if (sortKey === "totalAmount") {
+        cmp = a.totalAmount - b.totalAmount;
+      } else if (sortKey === "totalCount") {
+        cmp = a.totalCount - b.totalCount;
+      } else {
+        // latestDonationAt — nulls last
+        const ta = a.latestDonationAt ? new Date(a.latestDonationAt).getTime() : 0;
+        const tb = b.latestDonationAt ? new Date(b.latestDonationAt).getTime() : 0;
+        cmp = ta - tb;
+      }
+      return sortAsc ? cmp : -cmp;
+    });
+    return rows;
+  }, [donors, search, sortKey, sortAsc]);
+
+  const toggleSort = (key: DonorSortKey) => {
+    if (sortKey === key) setSortAsc((v) => !v);
+    else { setSortKey(key); setSortAsc(false); }
+  };
+
+  const SortIcon = ({ k }: { k: DonorSortKey }) => {
+    if (sortKey !== k) return <span className="text-muted-foreground/40 ml-0.5">↕</span>;
+    return <span className="text-primary ml-0.5">{sortAsc ? "↑" : "↓"}</span>;
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* PII notice */}
+      <div className="rounded-xl border bg-muted/40 px-4 py-3 text-xs text-muted-foreground flex items-start gap-2">
+        <ShieldCheck className="size-4 shrink-0 mt-0.5 text-muted-foreground/70" />
+        <span>
+          {t({
+            hi: "केवल पंजीकृत दानदाता दिखाए जाते हैं। PAN की केवल अंतिम 4 अंक प्रदर्शित होती हैं। पासवर्ड या पूर्ण PAN कभी नहीं दिखाया जाता।",
+            en: "Only registered donors are shown. PAN last 4 digits are displayed only. Passwords and full PAN are never exposed.",
+          })}
+        </span>
+      </div>
+
+      {/* Metrics */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-primary">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "पंजीकृत दानदाता", en: "Registered Donors" })}
+            </p>
+            <p className="font-display text-3xl mt-1">{totalDonors}</p>
+          </div>
+          <Users className="size-8 text-primary/30" />
+        </div>
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-leaf">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "सफल दान वाले", en: "With Succeeded Donations" })}
+            </p>
+            <p className="font-display text-3xl mt-1 text-leaf">{activeDonors}</p>
+          </div>
+          <CheckCircle2 className="size-8 text-leaf/30" />
+        </div>
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-turmeric">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "कुल संग्रह (TEST)", en: "Total Collected (TEST)" })}
+            </p>
+            <p className="font-display text-2xl mt-1 text-turmeric">{inr(totalSucceeded)}</p>
+          </div>
+          <TrendingUp className="size-8 text-turmeric/30" />
+        </div>
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-accent">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "बार-बार दाता (2+ दान)", en: "Repeat Donors (2+ donations)" })}
+            </p>
+            <p className="font-display text-3xl mt-1">{monthlyDonors}</p>
+          </div>
+          <Sparkles className="size-8 text-accent/30" />
+        </div>
+      </div>
+
+      {/* Search + Sort bar */}
+      <div className="card-soft p-4 space-y-3">
+        <div className="relative">
+          <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder={t({ hi: "दानदाता का नाम या ईमेल खोजें…", en: "Search donor name or email…" })}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-10 w-full rounded-xl border bg-card pl-9 pr-4 text-sm focus:border-primary focus:outline-none"
+          />
+          {search && (
+            <button onClick={() => setSearch("")} className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground">
+              <X className="size-4" />
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground border-t pt-2" aria-live="polite">
+          {filtered.length} {t({ hi: "दानदाता दिख रहे हैं (कुल", en: "donors shown (of" })} {totalDonors})
+        </p>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div role="alert" className="card-soft p-4 border-destructive/20 bg-destructive/5 text-destructive flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm">
+            <AlertCircle className="size-5 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button onClick={() => void onReload()} className="btn-big !min-h-8 bg-destructive text-destructive-foreground text-xs">
+            {t({ hi: "पुनः लोड करें", en: "Reload" })}
+          </button>
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading && !donors.length && (
+        <div className="card-soft p-12 text-center">
+          <div className="inline-block size-8 animate-spin rounded-full border-3 border-primary border-t-transparent" />
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t({ hi: "दानदाता रिकॉर्ड लोड हो रहे हैं…", en: "Loading donor records from database…" })}
+          </p>
+        </div>
+      )}
+
+      {/* Donors Table */}
+      {(!loading || donors.length > 0) && (
+        <div className="card-soft overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-muted/70 text-xs text-muted-foreground uppercase font-semibold">
+                <tr>
+                  <th className="p-3.5 cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("name")}>
+                    {t({ hi: "दानदाता", en: "Donor" })} <SortIcon k="name" />
+                  </th>
+                  <th className="p-3.5">{t({ hi: "PAN (अंतिम 4)", en: "PAN (last 4)" })}</th>
+                  <th className="p-3.5 cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("totalAmount")}>
+                    {t({ hi: "कुल राशि (सफल)", en: "Total (Succeeded)" })} <SortIcon k="totalAmount" />
+                  </th>
+                  <th className="p-3.5 cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("totalCount")}>
+                    {t({ hi: "दान", en: "Donations" })} <SortIcon k="totalCount" />
+                  </th>
+                  <th className="p-3.5">{t({ hi: "स्थिति सारांश", en: "Status Summary" })}</th>
+                  <th className="p-3.5 cursor-pointer hover:text-foreground select-none" onClick={() => toggleSort("latestDonationAt")}>
+                    {t({ hi: "नवीनतम दान", en: "Latest Donation" })} <SortIcon k="latestDonationAt" />
+                  </th>
+                  <th className="p-3.5 text-right">{t({ hi: "विवरण", en: "Details" })}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {filtered.map((donor) => (
+                  <tr key={donor.userId} className="hover:bg-muted/30 transition-colors">
+                    {/* Name + Email */}
+                    <td className="p-3.5 max-w-[200px]">
+                      <p className="font-semibold truncate">{donor.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{donor.email}</p>
+                    </td>
+
+                    {/* PAN last-4 */}
+                    <td className="p-3.5 font-mono text-xs">
+                      {donor.panLast4
+                        ? <span className="rounded bg-muted px-1.5 py-0.5">••••{donor.panLast4}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </td>
+
+                    {/* Total succeeded amount */}
+                    <td className="p-3.5 font-semibold whitespace-nowrap text-leaf">
+                      {inr(donor.totalAmount)}
+                    </td>
+
+                    {/* Count */}
+                    <td className="p-3.5 text-center font-semibold">
+                      {donor.totalCount}
+                    </td>
+
+                    {/* Status breakdown pills */}
+                    <td className="p-3.5">
+                      <div className="flex flex-wrap gap-1">
+                        {donor.succeededCount > 0 && (
+                          <span className="rounded-full bg-leaf-soft text-leaf px-2 py-0.5 text-[10px] font-semibold">
+                            ✓{donor.succeededCount}
+                          </span>
+                        )}
+                        {donor.pendingCount > 0 && (
+                          <span className="rounded-full bg-secondary text-secondary-foreground px-2 py-0.5 text-[10px] font-semibold">
+                            ⏳{donor.pendingCount}
+                          </span>
+                        )}
+                        {donor.failedCount > 0 && (
+                          <span className="rounded-full bg-destructive/10 text-destructive px-2 py-0.5 text-[10px] font-semibold">
+                            ✗{donor.failedCount}
+                          </span>
+                        )}
+                        {donor.totalCount === 0 && (
+                          <span className="text-xs text-muted-foreground">{t({ hi: "कोई दान नहीं", en: "No donations" })}</span>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Latest donation date */}
+                    <td className="p-3.5 text-xs text-muted-foreground whitespace-nowrap">
+                      {donor.latestDonationAt
+                        ? (
+                          <div className="flex items-center gap-1">
+                            <Calendar className="size-3" />
+                            <span>
+                              {new Date(donor.latestDonationAt).toLocaleDateString("en-IN", {
+                                day: "numeric", month: "short", year: "numeric",
+                              })}
+                            </span>
+                          </div>
+                        )
+                        : <span>—</span>}
+                    </td>
+
+                    {/* Detail button */}
+                    <td className="p-3.5 text-right">
+                      <button
+                        onClick={() => setDetailDonor(donor)}
+                        className="inline-flex items-center gap-1 text-xs text-primary font-semibold hover:underline"
+                        title={t({ hi: "दान इतिहास देखें", en: "View donation history" })}
+                      >
+                        <ChevronRight className="size-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+
+                {filtered.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan={7} className="p-10 text-center text-muted-foreground">
+                      <p className="font-semibold">
+                        {search
+                          ? t({ hi: "कोई दानदाता नहीं मिला।", en: "No donors match your search." })
+                          : t({ hi: "अभी कोई पंजीकृत दानदाता नहीं है।", en: "No registered donors yet." })}
+                      </p>
+                      <p className="text-xs mt-1">
+                        {search
+                          ? t({ hi: "खोज साफ़ करें।", en: "Clear the search." })
+                          : t({ hi: "/account पृष्ठ से दानदाता पंजीकरण करें।", en: "Register a donor from the /account page." })}
+                      </p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Donor Detail Drawer */}
+      {detailDonor && (
+        <DonorDetailDrawer
+          donor={detailDonor}
+          onClose={() => setDetailDonor(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// DONOR DETAIL DRAWER
+// -------------------------------------------------------------
+
+function DonorDetailDrawer({
+  donor,
+  onClose,
+}: {
+  donor: AdminDonorSummary;
+  onClose: () => void;
+}) {
+  const { t } = useLang();
+  const [history, setHistory] = useState<AdminDonorDonation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+    getAdminDonorDonations(donor.userId)
+      .then((rows) => { if (active) setHistory(rows); })
+      .catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : "Failed to load history."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [donor.userId]);
+
+  const statusBadge = (status: AdminDonorDonation["status"]) => {
+    const map = {
+      SUCCEEDED: { cls: "bg-leaf-soft text-leaf",                   label: { hi: "✓ सफल", en: "✓ Succeeded" } },
+      PENDING:   { cls: "bg-secondary text-secondary-foreground",   label: { hi: "⏳ लंबित", en: "⏳ Pending" } },
+      FAILED:    { cls: "bg-destructive/10 text-destructive",        label: { hi: "✗ विफल", en: "✗ Failed" } },
+    } as const;
+    const { cls, label } = map[status];
+    return (
+      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}>
+        {t(label)}
+      </span>
+    );
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-end bg-black/50 backdrop-blur-xs"
+      onClick={onClose}
+    >
+      <div
+        className="h-full w-full max-w-lg bg-card shadow-2xl overflow-y-auto animate-in slide-in-from-right-8 flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Sticky header */}
+        <div className="flex items-start justify-between p-5 border-b sticky top-0 bg-card z-10 shrink-0">
+          <div>
+            <h3 className="font-display text-xl">{donor.name}</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">{donor.email}</p>
+            {donor.panLast4 && (
+              <p className="text-xs font-mono text-muted-foreground mt-0.5">PAN ••••{donor.panLast4}</p>
+            )}
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted text-muted-foreground shrink-0 mt-0.5">
+            <X className="size-5" />
+          </button>
+        </div>
+
+        {/* Summary strip */}
+        <div className="grid grid-cols-3 gap-3 p-5 border-b shrink-0">
+          <div className="text-center">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {t({ hi: "कुल संग्रह", en: "Total Raised" })}
+            </p>
+            <p className="font-display text-xl mt-1 text-leaf">{inr(donor.totalAmount)}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {t({ hi: "कुल दान", en: "Donations" })}
+            </p>
+            <p className="font-display text-xl mt-1">{donor.totalCount}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              {t({ hi: "सफल / विफल", en: "Succeeded / Failed" })}
+            </p>
+            <p className="font-display text-xl mt-1">
+              <span className="text-leaf">{donor.succeededCount}</span>
+              <span className="text-muted-foreground text-sm"> / </span>
+              <span className="text-destructive">{donor.failedCount}</span>
+            </p>
+          </div>
+        </div>
+
+        {/* Donation history */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="px-5 py-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+              {t({ hi: "दान इतिहास (नवीनतम पहले)", en: "Donation History (latest first)" })}
+            </h4>
+
+            {loading && (
+              <div className="py-10 text-center">
+                <div className="inline-block size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                <p className="mt-2 text-xs text-muted-foreground">{t({ hi: "लोड हो रहा है…", en: "Loading…" })}</p>
+              </div>
+            )}
+
+            {error && (
+              <div role="alert" className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
+                {error}
+              </div>
+            )}
+
+            {!loading && !error && history.length === 0 && (
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                {t({ hi: "इस दानदाता का कोई दान रिकॉर्ड नहीं मिला।", en: "No donation records found for this donor." })}
+              </p>
+            )}
+
+            {!loading && !error && history.length > 0 && (
+              <div className="space-y-3">
+                {history.map((d) => (
+                  <div key={d.id} className="rounded-xl border bg-card/60 p-3 space-y-2">
+                    {/* Row 1: amount + status + type */}
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="font-semibold text-base">{inr(d.amount)}</span>
+                      <div className="flex items-center gap-1.5">
+                        {statusBadge(d.status)}
+                        {d.frequency === "MONTHLY" ? (
+                          <span className="rounded-md bg-secondary/50 px-2 py-0.5 text-[10px] font-medium">
+                            {t({ hi: "मासिक", en: "Monthly" })}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-muted-foreground">
+                            {t({ hi: "एकमुश्त", en: "One-time" })}
+                          </span>
+                        )}
+                        {d.testMode && (
+                          <span className="rounded bg-turmeric/20 px-1 py-0.5 text-[10px] font-semibold text-foreground/70">
+                            TEST
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Row 2: campaign + date */}
+                    <div className="flex items-center justify-between text-xs text-muted-foreground gap-2 flex-wrap">
+                      <span className="truncate">{t(d.campaign.title)}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Calendar className="size-3" />
+                        <span>
+                          {new Date(d.createdAt).toLocaleDateString("en-IN", {
+                            day: "numeric", month: "short", year: "numeric",
+                          })}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Row 3: receipt + payment reference */}
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground/80 gap-2 flex-wrap pt-1 border-t">
+                      <span className="font-mono">
+                        {d.receipt
+                          ? <span className="rounded bg-muted px-1.5 py-0.5 text-foreground">{d.receipt.receiptNumber}</span>
+                          : t({ hi: "रसीद नहीं", en: "No receipt" })}
+                      </span>
+                      <span className="font-mono text-[10px] truncate max-w-[160px]">{d.paymentReference}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-5 border-t shrink-0 bg-muted/30">
+          <p className="text-[11px] text-muted-foreground">
+            {t({
+              hi: "दानदाता ID: ",
+              en: "Donor user ID: ",
+            })}
+            <span className="font-mono">{donor.userId}</span>
+          </p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {t({
+              hi: "व्यक्तिगत जानकारी केवल अधिकृत ट्रस्ट प्रशासकों के लिए उपलब्ध है।",
+              en: "Personal data is accessible only to authorized trust administrators.",
+            })}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// DONATIONS SECTION (CHECKPOINT 4)
+// -------------------------------------------------------------
+
+type DonationStatusFilter = "all" | "SUCCEEDED" | "PENDING" | "FAILED";
+type FrequencyFilter = "all" | "ONE_TIME" | "MONTHLY";
+
+function DonationsSection({
+  donations,
+  loading,
+  error,
+  onReload,
+}: {
+  donations: AdminDonation[];
+  loading: boolean;
+  error: string | null;
+  onReload: () => Promise<void>;
+}) {
+  const { t } = useLang();
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<DonationStatusFilter>("all");
+  const [frequencyFilter, setFrequencyFilter] = useState<FrequencyFilter>("all");
+  const [campaignFilter, setCampaignFilter] = useState("all");
+  const [detailDonation, setDetailDonation] = useState<AdminDonation | null>(null);
+
+  // Derive unique campaign names for filter dropdown
+  const campaignOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const d of donations) {
+      if (!seen.has(d.campaign.id)) seen.set(d.campaign.id, d.campaign.title.en);
+    }
+    return Array.from(seen.entries());
+  }, [donations]);
+
+  // Filtered rows
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return donations.filter((d) => {
+      if (statusFilter !== "all" && d.status !== statusFilter) return false;
+      if (frequencyFilter !== "all" && d.frequency !== frequencyFilter) return false;
+      if (campaignFilter !== "all" && d.campaign.id !== campaignFilter) return false;
+      if (q) {
+        const haystack = [d.donorName, d.donorEmail, d.id, d.paymentReference, d.receipt?.receiptNumber ?? ""].join(" ").toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [donations, search, statusFilter, frequencyFilter, campaignFilter]);
+
+  // Summary metrics
+  const succeededCount = donations.filter((d) => d.status === "SUCCEEDED").length;
+  const failedCount = donations.filter((d) => d.status === "FAILED").length;
+  const pendingCount = donations.filter((d) => d.status === "PENDING").length;
+  const totalSucceededAmount = donations.filter((d) => d.status === "SUCCEEDED").reduce((s, d) => s + d.amount, 0);
+
+  const statusBadge = (status: AdminDonation["status"]) => {
+    const map: Record<AdminDonation["status"], { cls: string; label: { hi: string; en: string } }> = {
+      SUCCEEDED: { cls: "bg-leaf-soft text-leaf", label: { hi: "✓ सफल", en: "✓ Succeeded" } },
+      PENDING:   { cls: "bg-secondary text-secondary-foreground", label: { hi: "⏳ लंबित", en: "⏳ Pending" } },
+      FAILED:    { cls: "bg-destructive/10 text-destructive", label: { hi: "✗ विफल", en: "✗ Failed" } },
+    };
+    const { cls, label } = map[status];
+    return <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${cls}`}>{t(label)}</span>;
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Test-mode notice */}
+      <div className="rounded-xl border bg-muted/40 px-4 py-3 text-xs text-muted-foreground flex items-start gap-2">
+        <AlertCircle className="size-4 shrink-0 mt-0.5 text-muted-foreground/70" />
+        <span>
+          {t({
+            hi: "सभी लेन-देन परीक्षण मोड (MOCK) में हैं। कोई वास्तविक धनराशि एकत्र नहीं की गई है। PAN की अंतिम 4 अंक केवल प्रशासक दृश्य में उपलब्ध हैं।",
+            en: "All transactions are in TEST / MOCK mode. No real funds have been collected. PAN last 4 digits are visible to admins only.",
+          })}
+        </span>
+      </div>
+
+      {/* Metrics Strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-primary">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t({ hi: "कुल लेन-देन", en: "Total Transactions" })}</p>
+            <p className="font-display text-3xl mt-1">{donations.length}</p>
+          </div>
+          <Layers className="size-8 text-primary/30" />
+        </div>
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-leaf">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t({ hi: "सफल", en: "Succeeded" })}</p>
+            <p className="font-display text-3xl mt-1 text-leaf">{succeededCount}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{inr(totalSucceededAmount)}</p>
+          </div>
+          <CheckCircle2 className="size-8 text-leaf/30" />
+        </div>
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-turmeric">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t({ hi: "लंबित", en: "Pending" })}</p>
+            <p className="font-display text-3xl mt-1 text-turmeric">{pendingCount}</p>
+          </div>
+          <Clock className="size-8 text-turmeric/30" />
+        </div>
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-destructive">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t({ hi: "विफल", en: "Failed" })}</p>
+            <p className="font-display text-3xl mt-1 text-destructive">{failedCount}</p>
+          </div>
+          <AlertCircle className="size-8 text-destructive/20" />
+        </div>
+      </div>
+
+      {/* Search & Filter Bar */}
+      <div className="card-soft p-4 space-y-3">
+        <div className="relative">
+          <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder={t({ hi: "दानदाता नाम, ईमेल, लेन-देन ID या रसीद नंबर खोजें…", en: "Search donor name, email, transaction ID or receipt number…" })}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-10 w-full rounded-xl border bg-card pl-9 pr-4 text-sm focus:border-primary focus:outline-none"
+          />
+          {search && (
+            <button onClick={() => setSearch("")} className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground">
+              <X className="size-4" />
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t text-xs">
+          <label className="flex items-center gap-2">
+            <span className="font-semibold text-muted-foreground shrink-0">{t({ hi: "स्थिति:", en: "Status:" })}</span>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as DonationStatusFilter)}
+              className="h-8 flex-1 rounded-lg border bg-card px-2 font-medium focus:border-primary">
+              <option value="all">{t({ hi: "सभी स्थितियाँ", en: "All statuses" })}</option>
+              <option value="SUCCEEDED">{t({ hi: "✓ सफल", en: "✓ Succeeded" })}</option>
+              <option value="PENDING">{t({ hi: "⏳ लंबित", en: "⏳ Pending" })}</option>
+              <option value="FAILED">{t({ hi: "✗ विफल", en: "✗ Failed" })}</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="font-semibold text-muted-foreground shrink-0">{t({ hi: "प्रकार:", en: "Type:" })}</span>
+            <select value={frequencyFilter} onChange={(e) => setFrequencyFilter(e.target.value as FrequencyFilter)}
+              className="h-8 flex-1 rounded-lg border bg-card px-2 font-medium focus:border-primary">
+              <option value="all">{t({ hi: "सभी प्रकार", en: "All types" })}</option>
+              <option value="ONE_TIME">{t({ hi: "एकमुश्त", en: "One-time" })}</option>
+              <option value="MONTHLY">{t({ hi: "मासिक", en: "Monthly" })}</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="font-semibold text-muted-foreground shrink-0">{t({ hi: "अभियान:", en: "Campaign:" })}</span>
+            <select value={campaignFilter} onChange={(e) => setCampaignFilter(e.target.value)}
+              className="h-8 flex-1 rounded-lg border bg-card px-2 font-medium focus:border-primary">
+              <option value="all">{t({ hi: "सभी अभियान", en: "All campaigns" })}</option>
+              {campaignOptions.map(([id, name]) => (
+                <option key={id} value={id}>{name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="text-xs text-muted-foreground pt-1 border-t" aria-live="polite">
+          {filtered.length} {t({ hi: "लेन-देन दिख रहे हैं (कुल", en: "transactions shown (of" })} {donations.length})
+        </p>
+      </div>
+
+      {/* Load Error */}
+      {error && (
+        <div role="alert" className="card-soft p-4 border-destructive/20 bg-destructive/5 text-destructive flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm">
+            <AlertCircle className="size-5 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button onClick={() => void onReload()} className="btn-big !min-h-8 bg-destructive text-destructive-foreground text-xs">
+            {t({ hi: "पुनः लोड करें", en: "Reload" })}
+          </button>
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading && !donations.length && (
+        <div className="card-soft p-12 text-center">
+          <div className="inline-block size-8 animate-spin rounded-full border-3 border-primary border-t-transparent" />
+          <p className="mt-3 text-sm text-muted-foreground">{t({ hi: "लेन-देन लोड हो रहे हैं…", en: "Loading transactions from database…" })}</p>
+        </div>
+      )}
+
+      {/* Transactions Table */}
+      {(!loading || donations.length > 0) && (
+        <div className="card-soft overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-muted/70 text-xs text-muted-foreground uppercase font-semibold">
+                <tr>
+                  <th className="p-3.5">{t({ hi: "दानदाता", en: "Donor" })}</th>
+                  <th className="p-3.5">{t({ hi: "अभियान", en: "Campaign" })}</th>
+                  <th className="p-3.5">{t({ hi: "राशि", en: "Amount" })}</th>
+                  <th className="p-3.5">{t({ hi: "प्रकार", en: "Type" })}</th>
+                  <th className="p-3.5">{t({ hi: "स्थिति", en: "Status" })}</th>
+                  <th className="p-3.5">{t({ hi: "दिनांक", en: "Date" })}</th>
+                  <th className="p-3.5">{t({ hi: "रसीद", en: "Receipt" })}</th>
+                  <th className="p-3.5 text-right">{t({ hi: "विवरण", en: "Details" })}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {filtered.map((d) => (
+                  <tr key={d.id} className="hover:bg-muted/30 transition-colors">
+                    {/* Donor */}
+                    <td className="p-3.5 max-w-[160px]">
+                      <p className="font-semibold truncate">{d.donorName}</p>
+                      <p className="text-xs text-muted-foreground truncate">{d.donorEmail}</p>
+                      {d.donorPanLast4 && (
+                        <p className="text-[11px] text-muted-foreground/70 font-mono">PAN ••••{d.donorPanLast4}</p>
+                      )}
+                    </td>
+                    {/* Campaign */}
+                    <td className="p-3.5 text-xs text-muted-foreground max-w-[130px]">
+                      <span className="truncate block">{t(d.campaign.title)}</span>
+                    </td>
+                    {/* Amount */}
+                    <td className="p-3.5 font-semibold whitespace-nowrap">{inr(d.amount)}</td>
+                    {/* Type */}
+                    <td className="p-3.5 whitespace-nowrap">
+                      {d.frequency === "MONTHLY"
+                        ? <span className="rounded-md bg-secondary/50 px-2 py-0.5 text-xs font-medium">{t({ hi: "मासिक", en: "Monthly" })}</span>
+                        : <span className="text-xs text-muted-foreground">{t({ hi: "एकमुश्त", en: "One-time" })}</span>}
+                    </td>
+                    {/* Status */}
+                    <td className="p-3.5 whitespace-nowrap">{statusBadge(d.status)}</td>
+                    {/* Date */}
+                    <td className="p-3.5 text-xs text-muted-foreground whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <Calendar className="size-3" />
+                        <span>{new Date(d.createdAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+                      </div>
+                      {d.testMode && (
+                        <span className="text-[10px] rounded bg-turmeric/20 px-1 py-0.5 font-semibold text-foreground/70 mt-0.5 inline-block">TEST</span>
+                      )}
+                    </td>
+                    {/* Receipt */}
+                    <td className="p-3.5 font-mono text-xs whitespace-nowrap">
+                      {d.receipt
+                        ? <span className="rounded bg-muted px-1.5 py-0.5">{d.receipt.receiptNumber}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    {/* Detail */}
+                    <td className="p-3.5 text-right">
+                      <button
+                        onClick={() => setDetailDonation(d)}
+                        className="inline-flex items-center gap-1 text-xs text-primary font-semibold hover:underline"
+                      >
+                        <ChevronRight className="size-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+
+                {filtered.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan={8} className="p-10 text-center text-muted-foreground">
+                      <p className="font-semibold">{t({ hi: "कोई लेन-देन नहीं मिला।", en: "No transactions match your filters." })}</p>
+                      <p className="text-xs mt-1">{t({ hi: "फ़िल्टर साफ़ करें या /donate से परीक्षण दान करें।", en: "Clear filters or submit a test donation from /donate." })}</p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Transaction Detail Drawer */}
+      {detailDonation && (
+        <DonationDetailDrawer
+          donation={detailDonation}
+          onClose={() => setDetailDonation(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// DONATION DETAIL DRAWER
+// -------------------------------------------------------------
+
+function DonationDetailDrawer({ donation: d, onClose }: { donation: AdminDonation; onClose: () => void }) {
+  const { t } = useLang();
+
+  const statusMeta: Record<AdminDonation["status"], { cls: string; label: { hi: string; en: string } }> = {
+    SUCCEEDED: { cls: "bg-leaf-soft text-leaf", label: { hi: "✓ सफल (TEST)", en: "✓ Succeeded (TEST)" } },
+    PENDING:   { cls: "bg-secondary text-secondary-foreground", label: { hi: "⏳ लंबित", en: "⏳ Pending" } },
+    FAILED:    { cls: "bg-destructive/10 text-destructive", label: { hi: "✗ विफल", en: "✗ Failed" } },
+  };
+
+  const rows: Array<[{ hi: string; en: string }, string]> = [
+    [{ hi: "लेन-देन ID", en: "Transaction ID" }, d.id],
+    [{ hi: "भुगतान संदर्भ", en: "Payment Reference" }, d.paymentReference],
+    [{ hi: "दानदाता नाम", en: "Donor Name" }, d.donorName],
+    [{ hi: "दानदाता ईमेल", en: "Donor Email" }, d.donorEmail],
+    [{ hi: "PAN (अंतिम 4)", en: "PAN (last 4)" }, d.donorPanLast4 ? `••••${d.donorPanLast4}` : t({ hi: "उपलब्ध नहीं", en: "Not available" })],
+    [{ hi: "राशि", en: "Amount" }, inr(d.amount)],
+    [{ hi: "प्रकार", en: "Type" }, d.frequency === "MONTHLY" ? t({ hi: "मासिक", en: "Monthly" }) : t({ hi: "एकमुश्त", en: "One-time" })],
+    [{ hi: "अभियान", en: "Campaign" }, t(d.campaign.title)],
+    [{ hi: "बनाया गया", en: "Created" }, new Date(d.createdAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })],
+    [{ hi: "भुगतान दिनांक", en: "Paid At" }, d.paidAt ? new Date(d.paidAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }) : "—"],
+    [{ hi: "रसीद नंबर", en: "Receipt Number" }, d.receipt?.receiptNumber ?? "—"],
+    [{ hi: "परीक्षण मोड", en: "Test Mode" }, d.testMode ? t({ hi: "हाँ (MOCK)", en: "Yes (MOCK)" }) : t({ hi: "नहीं", en: "No" })],
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-end bg-black/50 backdrop-blur-xs" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-md bg-card shadow-2xl overflow-y-auto animate-in slide-in-from-right-8"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-card z-10">
+          <div>
+            <h3 className="font-display text-xl">{t({ hi: "लेन-देन विवरण", en: "Transaction Details" })}</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${statusMeta[d.status].cls}`}>
+                {t(statusMeta[d.status].label)}
+              </span>
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted text-muted-foreground">
+            <X className="size-5" />
+          </button>
+        </div>
+
+        {/* Test mode warning */}
+        {d.testMode && (
+          <div className="mx-5 mt-4 rounded-xl bg-turmeric/20 px-4 py-2.5 text-xs font-semibold text-foreground">
+            {t({
+              hi: "यह एक परीक्षण लेन-देन है। कोई वास्तविक धनराशि एकत्र नहीं की गई।",
+              en: "This is a test transaction. No real funds were collected.",
+            })}
+          </div>
+        )}
+
+        {/* Detail rows */}
+        <div className="p-5 space-y-0">
+          {rows.map(([label, value]) => (
+            <div key={label.en} className="flex items-start justify-between gap-4 py-3 border-b last:border-0">
+              <span className="text-xs font-semibold text-muted-foreground shrink-0 w-32">{t(label)}</span>
+              <span className="text-xs font-medium text-right break-all">{value}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Failed payment explanation */}
+        {d.status === "FAILED" && (
+          <div className="mx-5 mb-5 rounded-xl bg-destructive/10 p-4 text-xs text-destructive space-y-1">
+            <p className="font-semibold">{t({ hi: "भुगतान विफल", en: "Payment Failed" })}</p>
+            <p>
+              {t({
+                hi: "यह परीक्षण मोड में एक जानबूझकर असफल लेन-देन हो सकता है। किसी राशि का डेबिट नहीं हुआ।",
+                en: "This may be an intentionally failed transaction in test mode. No amount was debited.",
+              })}
+            </p>
+          </div>
+        )}
+
+        {/* Idempotency note */}
+        <div className="mx-5 mb-5 rounded-xl bg-muted/60 p-3 text-[11px] text-muted-foreground">
+          {t({
+            hi: "डुप्लीकेट भुगतान रोकने के लिए इस लेन-देन का idempotency key संरक्षित है।",
+            en: "The idempotency key for this transaction is preserved to prevent duplicate payments.",
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// CAMPAIGNS SECTION (CHECKPOINT 3)
+// -------------------------------------------------------------
+
+function CampaignsSection({
+  campaigns,
+  loading,
+  error,
+  onReload,
+  onSyncOverview,
+  setFeedback,
+}: {
+  campaigns: Campaign[];
+  loading: boolean;
+  error: string | null;
+  onReload: () => Promise<void>;
+  onSyncOverview: () => Promise<void>;
+  setFeedback: (msg: string | null) => void;
+}) {
+  const { t } = useLang();
+  const [busyActionId, setBusyActionId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [goalModalCampaign, setGoalModalCampaign] = useState<Campaign | null>(null);
+
+  // Metrics
+  const totalCount = campaigns.length;
+  const activeCount = campaigns.filter((c) => c.active).length;
+  const totalGoal = campaigns.reduce((sum, c) => sum + c.goal, 0);
+  const totalRaised = campaigns.reduce((sum, c) => sum + c.raised, 0);
+
+  // Toggle active / inactive
+  const handleToggleActive = async (campaign: Campaign) => {
+    setBusyActionId(`active-${campaign.id}`);
+    setActionError(null);
+    try {
+      await updateAdminCampaign(campaign.id, { active: !campaign.active });
+      await onReload();
+      void onSyncOverview();
+      setFeedback(
+        campaign.active
+          ? t({ hi: `अभियान "${campaign.title.hi}" को निष्क्रिय किया गया।`, en: `Campaign "${campaign.title.en}" deactivated.` })
+          : t({ hi: `अभियान "${campaign.title.hi}" को सक्रिय किया गया।`, en: `Campaign "${campaign.title.en}" activated.` })
+      );
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to update campaign status.");
+    } finally {
+      setBusyActionId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Metrics Strip */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-primary">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "कुल अभियान", en: "Total Campaigns" })}
+            </p>
+            <p className="font-display text-3xl mt-1">{totalCount}</p>
+          </div>
+          <HeartHandshake className="size-8 text-primary/30" />
+        </div>
+
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-leaf">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "सक्रिय अभियान", en: "Active" })}
+            </p>
+            <p className="font-display text-3xl mt-1 text-leaf">{activeCount}</p>
+          </div>
+          <CheckCircle2 className="size-8 text-leaf/30" />
+        </div>
+
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-turmeric">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "कुल लक्ष्य", en: "Total Goal" })}
+            </p>
+            <p className="font-display text-2xl mt-1 text-turmeric">{inr(totalGoal)}</p>
+          </div>
+          <TrendingUp className="size-8 text-turmeric/30" />
+        </div>
+
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-accent">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "कुल एकत्रित (seed + दान)", en: "Total Raised (seed + donations)" })}
+            </p>
+            <p className="font-display text-2xl mt-1">{inr(totalRaised)}</p>
+          </div>
+          <Layers className="size-8 text-accent/30" />
+        </div>
+      </div>
+
+      {/* Note about campaign management scope */}
+      <div className="rounded-xl border bg-muted/40 px-4 py-3 text-xs text-muted-foreground flex items-start gap-2">
+        <AlertCircle className="size-4 shrink-0 mt-0.5 text-muted-foreground/70" />
+        <span>
+          {t({
+            hi: "अभियान डेटाबेस सीड से बनाए जाते हैं। यहाँ आप लक्ष्य राशि बदल सकते हैं और अभियान को सक्रिय / निष्क्रिय कर सकते हैं। नया अभियान जोड़ने या हटाने के लिए डेटाबेस सीड फ़ाइल अपडेट करें।",
+            en: "Campaigns are seeded from the database. You can edit goal amounts and toggle active status here. To add or remove campaigns update the database seed file.",
+          })}
+        </span>
+      </div>
+
+      {/* Action Error Banner */}
+      {actionError && (
+        <div role="alert" className="flex items-center justify-between rounded-xl bg-destructive/10 p-4 text-sm font-medium text-destructive">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="size-5 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button onClick={() => setActionError(null)} className="p-1 hover:opacity-75">
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Load Error */}
+      {error && (
+        <div role="alert" className="card-soft p-4 border-destructive/20 bg-destructive/5 text-destructive flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm">
+            <AlertCircle className="size-5 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button onClick={() => void onReload()} className="btn-big !min-h-8 bg-destructive text-destructive-foreground text-xs">
+            {t({ hi: "पुनः लोड करें", en: "Reload" })}
+          </button>
+        </div>
+      )}
+
+      {/* Loading Skeleton */}
+      {loading && !campaigns.length && (
+        <div className="card-soft p-12 text-center">
+          <div className="inline-block size-8 animate-spin rounded-full border-3 border-primary border-t-transparent" />
+          <p className="mt-3 text-sm text-muted-foreground">{t({ hi: "अभियान सूची लोड हो रही है…", en: "Loading campaigns from database…" })}</p>
+        </div>
+      )}
+
+      {/* Campaigns Table */}
+      {(!loading || campaigns.length > 0) && (
+        <div className="card-soft overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-muted/70 text-xs text-muted-foreground uppercase font-semibold">
+                <tr>
+                  <th className="p-3.5">{t({ hi: "अभियान", en: "Campaign" })}</th>
+                  <th className="p-3.5">{t({ hi: "ज़िला", en: "District" })}</th>
+                  <th className="p-3.5">{t({ hi: "लक्ष्य", en: "Goal" })}</th>
+                  <th className="p-3.5">{t({ hi: "एकत्रित (seed+दान)", en: "Raised (seed+donations)" })}</th>
+                  <th className="p-3.5">{t({ hi: "प्रगति", en: "Progress" })}</th>
+                  <th className="p-3.5">{t({ hi: "स्थिति", en: "Status" })}</th>
+                  <th className="p-3.5 text-right">{t({ hi: "कार्रवाई", en: "Actions" })}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {campaigns.map((campaign) => {
+                  const isBusy = busyActionId === `active-${campaign.id}`;
+                  const progressPct = campaign.goal > 0
+                    ? Math.min(100, Math.round((campaign.raised / campaign.goal) * 100))
+                    : 0;
+                  return (
+                    <tr key={campaign.id} className="hover:bg-muted/30 transition-colors">
+                      {/* Title + story snippet */}
+                      <td className="p-3.5 max-w-xs">
+                        <div className="flex items-start gap-2">
+                          <span className="text-2xl mt-0.5 shrink-0" aria-hidden>{campaign.emoji}</span>
+                          <div>
+                            <p className="font-semibold text-foreground leading-snug">{campaign.title.hi}</p>
+                            <p className="text-xs text-muted-foreground leading-snug">{campaign.title.en}</p>
+                            <p className="text-[11px] text-muted-foreground/70 mt-0.5 line-clamp-1">{campaign.story.en}</p>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* District */}
+                      <td className="p-3.5 text-xs">
+                        <span className="rounded-full bg-muted px-2 py-0.5 font-medium capitalize">{campaign.district}</span>
+                      </td>
+
+                      {/* Goal */}
+                      <td className="p-3.5 font-semibold whitespace-nowrap">
+                        {inr(campaign.goal)}
+                      </td>
+
+                      {/* Raised */}
+                      <td className="p-3.5 whitespace-nowrap">
+                        <p className="font-semibold text-leaf">{inr(campaign.raised)}</p>
+                        <p className="text-[11px] text-muted-foreground">{campaign.donors} {t({ hi: "दानदाता", en: "donors" })}</p>
+                      </td>
+
+                      {/* Progress bar */}
+                      <td className="p-3.5 min-w-[120px]">
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 flex-1 bg-muted rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-leaf rounded-full transition-all"
+                              style={{ width: `${Math.max(progressPct, 2)}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-semibold tabular-nums w-8 text-right">{progressPct}%</span>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          {t({ hi: "शेष:", en: "Remaining:" })} {inr(Math.max(0, campaign.goal - campaign.raised))}
+                        </p>
+                      </td>
+
+                      {/* Active toggle */}
+                      <td className="p-3.5 whitespace-nowrap">
+                        <button
+                          onClick={() => void handleToggleActive(campaign)}
+                          disabled={isBusy}
+                          title={campaign.active ? t({ hi: "क्लिक करके निष्क्रिय करें", en: "Click to deactivate" }) : t({ hi: "क्लिक करके सक्रिय करें", en: "Click to activate" })}
+                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold transition-transform active:scale-95 disabled:opacity-50 ${
+                            campaign.active
+                              ? "bg-leaf-soft text-leaf hover:bg-leaf-soft/80"
+                              : "bg-muted text-muted-foreground hover:bg-muted/80"
+                          }`}
+                        >
+                          {campaign.active ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+                          <span>{campaign.active ? t({ hi: "सक्रिय", en: "Active" }) : t({ hi: "निष्क्रिय", en: "Inactive" })}</span>
+                        </button>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="p-3.5 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => setGoalModalCampaign(campaign)}
+                          className="p-1.5 rounded-lg border bg-card hover:bg-muted text-foreground"
+                          title={t({ hi: "लक्ष्य राशि बदलें", en: "Edit goal amount" })}
+                        >
+                          <Edit3 className="size-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {campaigns.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan={7} className="p-10 text-center text-muted-foreground">
+                      <p className="font-semibold">{t({ hi: "कोई अभियान नहीं मिला।", en: "No campaigns found." })}</p>
+                      <p className="text-xs mt-1">{t({ hi: "डेटाबेस सीड चलाएँ: npm run db:seed", en: "Run the database seed: npm run db:seed" })}</p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Per-campaign impact note */}
+      {campaigns.length > 0 && (
+        <div className="card-soft p-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            {t({ hi: "प्रति दान प्रभाव (Impact Per Donation)", en: "Impact Per Donation" })}
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {campaigns.map((c) => (
+              <div key={c.id} className="flex items-center gap-2 text-xs">
+                <span aria-hidden className="text-lg">{c.emoji}</span>
+                <span className="text-muted-foreground">
+                  <strong className="text-foreground">{c.title.en}:</strong> {c.impact.en}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Goal Edit Modal */}
+      {goalModalCampaign && (
+        <CampaignGoalModal
+          campaign={goalModalCampaign}
+          onClose={() => setGoalModalCampaign(null)}
+          onSaveSuccess={async (updated) => {
+            setGoalModalCampaign(null);
+            await onReload();
+            void onSyncOverview();
+            setFeedback(t({
+              hi: `अभियान "${updated.title.hi}" का लक्ष्य ${inr(updated.goal)} किया गया।`,
+              en: `Campaign "${updated.title.en}" goal updated to ${inr(updated.goal)}.`,
+            }));
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// CAMPAIGN GOAL EDIT MODAL
+// -------------------------------------------------------------
+
+function CampaignGoalModal({
+  campaign,
+  onClose,
+  onSaveSuccess,
+}: {
+  campaign: Campaign;
+  onClose: () => void;
+  onSaveSuccess: (updated: Campaign) => Promise<void>;
+}) {
+  const { t } = useLang();
+  const [goalInput, setGoalInput] = useState(String(campaign.goal));
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setFormError(null);
+    const parsed = Number(goalInput.replace(/,/g, "").trim());
+    if (!Number.isFinite(parsed) || parsed < 1000 || parsed > 100_000_000) {
+      setFormError(t({
+        hi: "लक्ष्य राशि ₹1,000 से ₹10,00,00,000 के बीच होनी चाहिए।",
+        en: "Goal amount must be between ₹1,000 and ₹10,00,00,000.",
+      }));
+      return;
+    }
+    setBusy(true);
+    try {
+      const updated = await updateAdminCampaign(campaign.id, { goalAmount: parsed });
+      await onSaveSuccess(updated);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to update goal.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+      <div className="card-soft max-w-md w-full p-6 space-y-5 bg-card shadow-xl animate-in fade-in zoom-in-95">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-2xl" aria-hidden>{campaign.emoji}</span>
+              <h3 className="font-display text-xl text-foreground">
+                {t({ hi: "लक्ष्य राशि संपादित करें", en: "Edit Goal Amount" })}
+              </h3>
+            </div>
+            <p className="text-sm text-muted-foreground mt-0.5">{campaign.title.en}</p>
+          </div>
+          <button onClick={onClose} disabled={busy} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
+            <X className="size-5" />
+          </button>
+        </div>
+
+        {/* Current stats */}
+        <div className="rounded-xl bg-muted/50 p-3 text-xs space-y-1">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t({ hi: "वर्तमान लक्ष्य:", en: "Current goal:" })}</span>
+            <span className="font-semibold">{inr(campaign.goal)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t({ hi: "एकत्रित (seed + दान):", en: "Raised (seed + donations):" })}</span>
+            <span className="font-semibold text-leaf">{inr(campaign.raised)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t({ hi: "दानदाता:", en: "Donors:" })}</span>
+            <span className="font-semibold">{campaign.donors}</span>
+          </div>
+        </div>
+
+        {/* Input */}
+        <label className="flex flex-col gap-1.5 text-sm font-medium">
+          {t({ hi: "नई लक्ष्य राशि (₹)", en: "New Goal Amount (₹)" })}
+          <input
+            type="number"
+            min={1000}
+            max={100_000_000}
+            step={1000}
+            value={goalInput}
+            onChange={(e) => setGoalInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleSave(); }}
+            className="h-11 rounded-xl border bg-card px-3 text-base font-semibold focus:border-primary focus:outline-none"
+            autoFocus
+          />
+          <span className="text-xs text-muted-foreground font-normal">
+            {t({ hi: "न्यूनतम ₹1,000 — अधिकतम ₹10 करोड़", en: "Minimum ₹1,000 — Maximum ₹10 crore" })}
+          </span>
+        </label>
+
+        {formError && (
+          <div role="alert" className="flex items-center gap-2 rounded-xl bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertCircle className="size-4 shrink-0" />
+            <span>{formError}</span>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex justify-end gap-3 pt-1 border-t">
+          <button onClick={onClose} disabled={busy} className="btn-big !min-h-10 border bg-card">
+            {t({ hi: "रद्द करें", en: "Cancel" })}
+          </button>
+          <button
+            onClick={() => void handleSave()}
+            disabled={busy}
+            className="btn-big !min-h-10 bg-primary text-primary-foreground disabled:opacity-50"
+          >
+            {busy
+              ? t({ hi: "सहेजा जा रहा है…", en: "Saving…" })
+              : t({ hi: "लक्ष्य अपडेट करें", en: "Update Goal" })}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -540,6 +1948,7 @@ function SchemesSection({
   const [editingScheme, setEditingScheme] = useState<Scheme | null>(null);
   const [deleteDialogScheme, setDeleteDialogScheme] = useState<Scheme | null>(null);
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Statistics calculation
   const totalCount = schemes.length;
@@ -576,6 +1985,7 @@ function SchemesSection({
   // Quick toggle publish/unpublish
   const handleTogglePublish = async (scheme: Scheme) => {
     setBusyActionId(`publish-${scheme.id}`);
+    setActionError(null);
     try {
       await updateAdminScheme(scheme.id, { published: !scheme.published });
       await onReload();
@@ -586,7 +1996,7 @@ function SchemesSection({
           : t({ hi: `योजना "${scheme.name.hi}" को सफलतापूर्वक प्रकाशित किया गया!`, en: `Scheme "${scheme.name.en}" published successfully!` })
       );
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update publication status.");
+      setActionError(err instanceof Error ? err.message : "Failed to update publication status.");
     } finally {
       setBusyActionId(null);
     }
@@ -595,6 +2005,7 @@ function SchemesSection({
   // Delete scheme
   const handleDeleteScheme = async (scheme: Scheme) => {
     setBusyActionId(`delete-${scheme.id}`);
+    setActionError(null);
     try {
       await deleteAdminScheme(scheme.id);
       await onReload();
@@ -602,7 +2013,8 @@ function SchemesSection({
       setDeleteDialogScheme(null);
       setFeedback(t({ hi: `योजना "${scheme.name.hi}" को सफलतापूर्वक हटा दिया गया।`, en: `Scheme "${scheme.name.en}" deleted successfully.` }));
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete scheme.");
+      setDeleteDialogScheme(null);
+      setActionError(err instanceof Error ? err.message : "Failed to delete scheme.");
     } finally {
       setBusyActionId(null);
     }
@@ -727,6 +2139,19 @@ function SchemesSection({
           </label>
         </div>
       </div>
+
+      {/* Action Error Banner (publish/delete failures) */}
+      {actionError && (
+        <div role="alert" className="flex items-center justify-between rounded-xl bg-destructive/10 p-4 text-sm font-medium text-destructive">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="size-5 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button onClick={() => setActionError(null)} className="p-1 hover:opacity-75">
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
 
       {/* Schemes Error State */}
       {error && (
@@ -854,6 +2279,19 @@ function SchemesSection({
                       {/* Actions */}
                       <td className="p-3.5 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
+                          {/* View on site (published only) */}
+                          {scheme.published && (
+                            <a
+                              href={`/schemes/${encodeURIComponent(scheme.id)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1.5 rounded-lg border bg-card hover:bg-muted text-muted-foreground"
+                              title={t({ hi: "पोर्टल पर देखें", en: "View on site" })}
+                            >
+                              <ExternalLink className="size-4" />
+                            </a>
+                          )}
+
                           {/* Edit button */}
                           <button
                             onClick={() => {
@@ -1125,7 +2563,11 @@ function SchemeModal({
       rules: parsedRules,
       sourceUrl: sourceUrl.trim() || null,
       officialNoticeText: officialNoticeText.trim() || null,
-      lastCheckedAt: lastCheckedAt ? new Date(lastCheckedAt).toISOString() : undefined,
+      // Only send lastCheckedAt when a source URL is present (or for existing schemes
+      // that previously had a verification date — the date picker still lets admins update it).
+      lastCheckedAt: (sourceUrl.trim() || (isEditing && scheme?.lastCheckedAt))
+        ? (lastCheckedAt ? new Date(lastCheckedAt).toISOString() : null)
+        : undefined,
       published: publishIntent !== undefined ? publishIntent : (scheme?.published ?? false),
     };
 
@@ -1137,12 +2579,16 @@ function SchemeModal({
       } else {
         saved = await createAdminScheme(payload);
       }
+      // onSaveSuccess closes the modal and reloads; errors here are reported
+      // to the parent (SchemesSection) via its own error state.
       await onSaveSuccess(saved);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to save scheme.");
-    } finally {
       setBusy(false);
     }
+    // Do NOT reset busy in a finally block — onSaveSuccess unmounts this component
+    // when successful, so calling setBusy(false) after it would cause a state update on
+    // an unmounted component. The catch branch above handles the failure path.
   };
 
   return (

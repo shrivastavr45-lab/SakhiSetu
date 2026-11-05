@@ -25,12 +25,15 @@ const COOKIE_OPTIONS = {
 };
 
 export function setSessionCookie(response: Response, user: { id: string; email: string; role: UserRole }) {
-  const token = jwt.sign({ role: user.role, email: user.email }, env.JWT_SECRET, {
+  const signOptions: jwt.SignOptions = {
     subject: user.id,
-    expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions["expiresIn"],
     issuer: "sakhisetu-api",
     audience: "sakhisetu-web",
-  });
+  };
+  // expiresIn is guaranteed to be defined (the env schema requires it), so the
+  // cast to the non-undefined subset is safe.
+  signOptions.expiresIn = env.JWT_EXPIRES_IN as jwt.SignOptions["expiresIn"] & (string | number);
+  const token = jwt.sign({ role: user.role, email: user.email }, env.JWT_SECRET, signOptions);
   response.cookie(AUTH_COOKIE, token, COOKIE_OPTIONS);
 }
 
