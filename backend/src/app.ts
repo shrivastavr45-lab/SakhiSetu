@@ -14,6 +14,7 @@ import { adminDonorRouter } from "./routes/donor.routes.js";
 import { eligibilityRouter } from "./routes/eligibility.routes.js";
 import { schemeRouter, adminSchemeRouter } from "./routes/scheme.routes.js";
 import { settingsRouter, adminSettingsRouter } from "./routes/settings.routes.js";
+import { adminReceiptRouter } from "./routes/receipt.routes.js";
 import { adminOverviewRouter } from "./routes/overview.routes.js";
 
 export const app = express();
@@ -75,6 +76,7 @@ app.use("/api/admin/schemes", adminSchemeRouter);
 app.use("/api/admin/campaigns", adminCampaignRouter);
 app.use("/api/admin/donations", adminDonationRouter);
 app.use("/api/admin/donors", adminDonorRouter);
+app.use("/api/admin/receipts", adminReceiptRouter);
 app.use("/api/admin/ai", adminAiRouter);
 app.use("/api/admin/overview", adminOverviewRouter);
 app.use("/api/admin/settings", adminSettingsRouter);

@@ -1,33 +1,46 @@
 # SakhiSetu implementation status
 
-**Snapshot:** 4 November 2026  
-**Workspace:** `sakhi-scheme-spark-main`  
-**Overall state:** Backend source and frontend integration are implemented in the workspace, including explicit controller modules. End-to-end acceptance is **not yet verified** because npm registry DNS resolution and PostgreSQL infrastructure were unavailable in this execution environment.
+**Snapshot:** 5 November 2026 (updated after Checkpoint 6)
+**Workspace:** `sakhi-scheme-spark-main`
+**Overall state:** Admin dashboard checkpoints 1–6 implemented and typechecked. Backend and frontend pass TypeScript strict-mode checks. 76 backend unit tests pass. End-to-end browser acceptance requires a running PostgreSQL instance and `npm install`.
+
+## Admin dashboard checkpoint progress
+
+| Checkpoint | Feature | Status |
+|---|---|---|
+| CP1 | Overview dashboard — live stats, monthly trends, recent donations | **Complete** |
+| CP2 | Scheme management — full CRUD, publish toggle, AI summary workflow | **Complete** |
+| CP3 | Campaign management — active toggle, goal editing | **Complete** |
+| CP4 | Donations & transactions — search, filters, detail drawer | **Complete** |
+| CP5 | Donor records — aggregated per-user stats, history drawer | **Complete** |
+| CP6 | Receipts & certificates — list, search, PDF download, detail drawer | **Complete** |
+| CP7 | Reports & analytics | Upcoming |
+| CP8 | Settings — trust banner, audit log | Upcoming |
 
 ## Acceptance matrix
 
 | ID | Requirement | Current state | Evidence / limitation |
 |---|---|---|---|
 | A1 | Existing frontend inspection and map | **Implemented** | `docs/frontend-backend-map.md`; React/TanStack routes inspected |
-| A2 | Separate TypeScript backend | **Implemented, syntax-checked; build blocked** | `backend/package.json` now declares backend runtime/dev dependencies and scripts; Express app/server, environment/Prisma config, explicit controllers, endpoint routers, middleware and reused services exist. Registry DNS prevented dependency installation |
-| A3 | PostgreSQL + Prisma migrations | **Implemented, not DB-verified** | `backend/prisma/schema.prisma`, SQL migration and seed exist; no PostgreSQL server/client available |
-| A4 | Registration/login/JWT/bcrypt/authorization | **Implemented, not integration-tested** | Auth routes, bcrypt hashing, HttpOnly cookie, role lookup and API middleware; no DB available |
-| A5 | Scheme listing/search/detail | **Implemented, not integration-tested** | Public scheme endpoints query Prisma-backed records |
-| A6 | Deterministic eligibility | **Unit-tested** | Nine rule-engine tests pass; API/database integration not available |
-| A7 | Admin operations | **Implemented, not integration-tested** | Role-protected scheme/campaign/donation/settings and AI review endpoints |
-| A8 | Test-mode donations | **Implemented, not integration-tested** | Mock-only service; no actual funds/card details; DB unavailable |
-| A9 | Idempotency and concurrency | **Implemented, not load-tested** | Unique idempotency key, keyed-HMAC request fingerprint, transactional donation/payment/receipt writes, PostgreSQL sequence-backed receipt allocation and duplicate conflict recovery under Read Committed; concurrency/load behaviour not exercised against PostgreSQL |
-| A10 | PDF receipt / 80G preview | **Implemented, not runtime-tested** | PDFKit code and preview warning exist; PDFKit not installed; Devanagari needs configured font |
-| A11 | Gemini integration | **Implemented, not live-tested** | Server-only SDK client, scheme-context prompting and controlled unavailable/error responses; no API key supplied |
-| A12 | Frontend API integration | **Implemented, not browser-tested** | Central API client and route-level calls in `src/routes`; dependencies/browser unavailable |
-| A13 | Persistent mock-data replacement | **Partially implemented** | Schemes, campaigns, finder results, donations and homepage banner now use APIs. Illustrative campaign seed values remain intentionally. Static public trust statistics remain based on the brief. |
-| A14 | Input validation | **Implemented, not full-suite-tested** | Zod request schemas on backend; form-side constraints in the existing UI |
-| A15 | Central error handling | **Implemented, not integration-tested** | Express async wrapper, malformed/oversized JSON handling, Prisma error mapping and centralized error middleware |
-| A16 | Backend test suite | **Partially verified** | `node --experimental-strip-types --test backend/tests/*.test.mjs`: 14 passed, 0 failed. Coverage includes pure eligibility rules, idempotency request fingerprints and Indian financial-year/receipt-number formatting. Database transaction/concurrency behaviour is still not exercised. |
-| A17 | Frontend and browser journeys | **Blocked** | `npm install` timed out; no `node_modules`, so Vitest/Playwright/browser checks could not run |
-| A18 | Security checks | **Source-reviewed, not penetration-tested** | JWT, HttpOnly cookie, role checks, bcrypt, rate limits, Helmet, CORS, PAN encryption, strict request schemas, no committed real secrets. No security scan/penetration test ran. |
-| A19 | Frontend/backend production builds | **Blocked** | Dependencies unavailable; a transpile-only syntax pass is not a build or typecheck |
-| A20 | Documentation | **Implemented** | `README.md`, `backend/README.md`, `deployment.md`, `docs/frontend-backend-map.md`, `docs/technical-design.md`, this file |
+| A2 | Separate TypeScript backend | **Typechecked: 0 errors** | `node_modules/.bin/tsc --noEmit -p backend/tsconfig.json` passes with strict mode, exactOptionalPropertyTypes, noUncheckedIndexedAccess |
+| A3 | PostgreSQL + Prisma migrations | **Implemented, not DB-verified** | `backend/prisma/schema.prisma`, SQL migration and seed exist; requires live PostgreSQL |
+| A4 | Registration/login/JWT/bcrypt/authorization | **Implemented, not integration-tested** | Auth routes, bcrypt hashing, HttpOnly cookie, role lookup and API middleware |
+| A5 | Scheme listing/search/detail | **Implemented** | Public scheme endpoints with full CRUD admin; CP2 typecheck clean |
+| A6 | Deterministic eligibility | **Unit-tested** | 14 eligibility tests pass covering age bands, districts, boolean rules |
+| A7 | Admin operations | **Implemented** | Role-protected endpoints for all 6 admin sections; CP2–CP6 all typechecked |
+| A8 | Test-mode donations | **Implemented** | Mock-only service; 80G disclaimer on every PDF; no real funds |
+| A9 | Idempotency and concurrency | **Implemented, not load-tested** | HMAC fingerprint, PostgreSQL sequence-backed receipt allocation, Read Committed transaction with P2002/P2034 retry |
+| A10 | PDF receipt / 80G preview | **Implemented** | `GET /api/receipts/:id.pdf` (isOwner/isAdmin/isTokenValid); `GET /admin/receipts` list; admin download button in ReceiptsSection and DonationDetailDrawer. TEST/PREVIEW watermark on every PDF. Devanagari requires `PDF_FONT_PATH` env var pointing to a Noto Sans Devanagari TTF. |
+| A11 | Gemini integration | **Implemented, not live-tested** | Server-only SDK; AI summary draft/approve/dismiss workflow in scheme editor; no API key in repo |
+| A12 | Frontend API integration | **Typechecked: 0 errors** | Central API client with all admin functions; `node_modules/.bin/tsc --noEmit -p tsconfig.json` passes |
+| A13 | Persistent mock-data replacement | **Implemented** | Schemes, campaigns, donations, donors, receipts all served from PostgreSQL |
+| A14 | Input validation | **Implemented** | Zod request schemas on backend; form-side validation in all admin modals |
+| A15 | Central error handling | **Implemented** | Express async wrapper, AppError, Prisma error mapping, centralized errorHandler |
+| A16 | Backend test suite | **76/76 pass** | `node --experimental-strip-types --test backend/tests/*.test.mjs`: 76 tests, 0 failed. Covers eligibility, idempotency fingerprints, financial year / receipt formatting, donation status categorisation, donor aggregation / search / sort / PAN masking, receipt token derivation, access-control logic, safeEqualHex, sha256 |
+| A17 | Frontend and browser journeys | **Requires npm install + PostgreSQL** | All TypeScript passes; browser testing instructions provided in each checkpoint |
+| A18 | Security checks | **Source-reviewed** | JWT, HttpOnly cookie, ADMIN role guard, bcrypt, rate limits, Helmet, CORS, AES-256-GCM PAN encryption, timing-safe token comparison, strict Zod schemas, no committed real secrets |
+| A19 | Frontend/backend production builds | **Typechecks pass; runtime build untested** | Requires `npm install` and `node_modules/.bin/tsc -p backend/tsconfig.json` for compiled output |
+| A20 | Documentation | **Updated** | This file updated to reflect CP6 completion |
 
 ## Checks executed
 

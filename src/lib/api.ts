@@ -165,6 +165,23 @@ export type AdminDonorDonation = {
 export const getAdminDonors = () => request<AdminDonorSummary[]>("/admin/donors");
 export const getAdminDonorDonations = (userId: string) =>
   request<AdminDonorDonation[]>(`/admin/donors/${encodeURIComponent(userId)}/donations`);
+
+export type AdminReceipt = {
+  id: string;
+  receiptNumber: string;
+  generatedAt: string;
+  donationId: string;
+  donorName: string;
+  donorEmail: string;
+  donorPanLast4: string | null;
+  amount: number;
+  frequency: "ONE_TIME" | "MONTHLY";
+  testMode: boolean;
+  paidAt: string | null;
+  campaign: { id: string; title: L };
+};
+
+export const getAdminReceipts = () => request<AdminReceipt[]>("/admin/receipts");
 export const createAdminScheme = (body: Record<string, unknown> & { need: string; name: L }) => request<Scheme>("/admin/schemes", { method: "POST", body });
 export const updateAdminScheme = (id: string, body: Record<string, unknown>) => request<Scheme>(`/admin/schemes/${encodeURIComponent(id)}`, { method: "PATCH", body });
 export const deleteAdminScheme = (id: string) => request<{ deleted: boolean }>(`/admin/schemes/${encodeURIComponent(id)}`, { method: "DELETE" });

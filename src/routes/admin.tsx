@@ -42,6 +42,8 @@ import {
   getAdminDonations,
   getAdminDonors,
   getAdminDonorDonations,
+  getAdminReceipts,
+  downloadReceipt,
   createAdminScheme,
   updateAdminScheme,
   deleteAdminScheme,
@@ -55,6 +57,7 @@ import {
   type AdminDonation,
   type AdminDonorSummary,
   type AdminDonorDonation,
+  type AdminReceipt,
   type SessionUser,
 } from "@/lib/api";
 
@@ -114,7 +117,6 @@ const NAV_ITEMS: NavItem[] = [
     icon: FileText,
     label: { hi: "रसीदें व प्रमाण पत्र", en: "Receipts & Certificates" },
     description: { hi: "80G रसीदें, पीडीएफ डाउनलोड व जनरेशन स्थिति", en: "80G test receipts, PDF downloads & status" },
-    checkpoint: "Checkpoint 6",
   },
   {
     id: "reports",
@@ -164,6 +166,11 @@ function AdminDashboard() {
   const [donors, setDonors] = useState<AdminDonorSummary[]>([]);
   const [loadingDonors, setLoadingDonors] = useState(false);
   const [donorsError, setDonorsError] = useState<string | null>(null);
+
+  // Receipts management states
+  const [receipts, setReceipts] = useState<AdminReceipt[]>([]);
+  const [loadingReceipts, setLoadingReceipts] = useState(false);
+  const [receiptsError, setReceiptsError] = useState<string | null>(null);
 
   // Login form states
   const [loginEmail, setLoginEmail] = useState("admin@sakhisetu.test");
@@ -259,6 +266,20 @@ function AdminDashboard() {
     }
   };
 
+  // Fetch receipts (admin view)
+  const fetchReceipts = async () => {
+    setLoadingReceipts(true);
+    setReceiptsError(null);
+    try {
+      const data = await getAdminReceipts();
+      setReceipts(data);
+    } catch (err) {
+      setReceiptsError(err instanceof Error ? err.message : "Failed to load receipts.");
+    } finally {
+      setLoadingReceipts(false);
+    }
+  };
+
   useEffect(() => {
     if (user?.role === "ADMIN") {
       void fetchOverview();
@@ -266,6 +287,7 @@ function AdminDashboard() {
       void fetchCampaigns();
       void fetchDonations();
       void fetchDonors();
+      void fetchReceipts();
     }
   }, [user]);
 
@@ -304,6 +326,7 @@ function AdminDashboard() {
       setCampaigns([]);
       setDonations([]);
       setDonors([]);
+      setReceipts([]);
       setBusyKey(null);
     }
   };
@@ -557,6 +580,17 @@ function AdminDashboard() {
                 <span>{t({ hi: "दानदाता सूची ताज़ा करें", en: "Refresh Donors" })}</span>
               </button>
             )}
+
+            {activeNav === "receipts" && (
+              <button
+                onClick={() => void fetchReceipts()}
+                disabled={loadingReceipts}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl border bg-card text-xs font-semibold hover:bg-muted disabled:opacity-50"
+              >
+                <RefreshCw className={`size-3.5 ${loadingReceipts ? "animate-spin" : ""}`} />
+                <span>{t({ hi: "रसीद सूची ताज़ा करें", en: "Refresh Receipts" })}</span>
+              </button>
+            )}
           </div>
 
           {/* Feedback message banner */}
@@ -627,14 +661,413 @@ function AdminDashboard() {
             />
           )}
 
-          {/* SECTIONS 6-8: UPCOMING CHECKPOINTS ROADMAP */}
-          {activeNav !== "overview" && activeNav !== "schemes" && activeNav !== "campaigns" && activeNav !== "donations" && activeNav !== "donors" && (
+          {/* SECTION 6: RECEIPTS & CERTIFICATES */}
+          {activeNav === "receipts" && (
+            <ReceiptsSection
+              receipts={receipts}
+              loading={loadingReceipts}
+              error={receiptsError}
+              onReload={fetchReceipts}
+            />
+          )}
+
+          {/* SECTIONS 7-8: UPCOMING CHECKPOINTS ROADMAP */}
+          {activeNav !== "overview" && activeNav !== "schemes" && activeNav !== "campaigns" && activeNav !== "donations" && activeNav !== "donors" && activeNav !== "receipts" && (
             <CheckpointRoadmapSection
               navItem={currentNav}
               onBackToOverview={() => setActiveNav("overview")}
             />
           )}
         </main>
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// RECEIPTS SECTION (CHECKPOINT 6)
+// -------------------------------------------------------------
+
+function ReceiptsSection({
+  receipts,
+  loading,
+  error,
+  onReload,
+}: {
+  receipts: AdminReceipt[];
+  loading: boolean;
+  error: string | null;
+  onReload: () => Promise<void>;
+}) {
+  const { t } = useLang();
+  const [search, setSearch] = useState("");
+  const [campaignFilter, setCampaignFilter] = useState("all");
+  const [detailReceipt, setDetailReceipt] = useState<AdminReceipt | null>(null);
+
+  const campaignOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of receipts) {
+      if (!seen.has(r.campaign.id)) seen.set(r.campaign.id, r.campaign.title.en);
+    }
+    return Array.from(seen.entries());
+  }, [receipts]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return receipts.filter((r) => {
+      if (campaignFilter !== "all" && r.campaign.id !== campaignFilter) return false;
+      if (q) {
+        const hay = [r.receiptNumber, r.donorName, r.donorEmail, r.donationId].join(" ").toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [receipts, search, campaignFilter]);
+
+  const totalAmount = receipts.reduce((s, r) => s + r.amount, 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Test-mode notice */}
+      <div className="rounded-xl border bg-muted/40 px-4 py-3 text-xs text-muted-foreground flex items-start gap-2">
+        <AlertCircle className="size-4 shrink-0 mt-0.5 text-muted-foreground/70" />
+        <span>
+          {t({
+            hi: "सभी रसीदें परीक्षण मोड (TEST / PREVIEW) में हैं। ये 80G कर-छूट के लिए मान्य नहीं हैं। Trust PAN और 80G पंजीकरण डेमो placeholder हैं जब तक सत्यापित नहीं किए जाते।",
+            en: "All receipts are TEST / PREVIEW only. They are not valid 80G tax certificates. Trust PAN and 80G registration are demo placeholders until formally verified.",
+          })}
+        </span>
+      </div>
+
+      {/* Metrics */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-primary">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "कुल रसीदें", en: "Total Receipts" })}
+            </p>
+            <p className="font-display text-3xl mt-1">{receipts.length}</p>
+          </div>
+          <FileText className="size-8 text-primary/30" />
+        </div>
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-leaf">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "कुल राशि (TEST)", en: "Total Amount (TEST)" })}
+            </p>
+            <p className="font-display text-2xl mt-1 text-leaf">{inr(totalAmount)}</p>
+          </div>
+          <CheckCircle2 className="size-8 text-leaf/30" />
+        </div>
+        <div className="card-soft p-4 flex items-center justify-between border-l-4 border-l-turmeric">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {t({ hi: "अभियान", en: "Campaigns" })}
+            </p>
+            <p className="font-display text-3xl mt-1">{campaignOptions.length}</p>
+          </div>
+          <HeartHandshake className="size-8 text-turmeric/30" />
+        </div>
+      </div>
+
+      {/* Search + filter */}
+      <div className="card-soft p-4 space-y-3">
+        <div className="flex flex-col md:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder={t({ hi: "रसीद नंबर, दानदाता नाम या ईमेल खोजें…", en: "Search receipt number, donor name or email…" })}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-10 w-full rounded-xl border bg-card pl-9 pr-4 text-sm focus:border-primary focus:outline-none"
+            />
+            {search && (
+              <button onClick={() => setSearch("")} className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground">
+                <X className="size-4" />
+              </button>
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-xs shrink-0">
+            <span className="font-semibold text-muted-foreground">{t({ hi: "अभियान:", en: "Campaign:" })}</span>
+            <select
+              value={campaignFilter}
+              onChange={(e) => setCampaignFilter(e.target.value)}
+              className="h-10 rounded-xl border bg-card px-3 font-medium focus:border-primary text-sm"
+            >
+              <option value="all">{t({ hi: "सभी अभियान", en: "All campaigns" })}</option>
+              {campaignOptions.map(([id, name]) => (
+                <option key={id} value={id}>{name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="text-xs text-muted-foreground border-t pt-2" aria-live="polite">
+          {filtered.length} {t({ hi: "रसीदें दिख रही हैं (कुल", en: "receipts shown (of" })} {receipts.length})
+        </p>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div role="alert" className="card-soft p-4 border-destructive/20 bg-destructive/5 text-destructive flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm">
+            <AlertCircle className="size-5 shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button onClick={() => void onReload()} className="btn-big !min-h-8 bg-destructive text-destructive-foreground text-xs">
+            {t({ hi: "पुनः लोड करें", en: "Reload" })}
+          </button>
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading && !receipts.length && (
+        <div className="card-soft p-12 text-center">
+          <div className="inline-block size-8 animate-spin rounded-full border-3 border-primary border-t-transparent" />
+          <p className="mt-3 text-sm text-muted-foreground">
+            {t({ hi: "रसीद रिकॉर्ड लोड हो रहे हैं…", en: "Loading receipt records from database…" })}
+          </p>
+        </div>
+      )}
+
+      {/* Receipts table */}
+      {(!loading || receipts.length > 0) && (
+        <div className="card-soft overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-muted/70 text-xs text-muted-foreground uppercase font-semibold">
+                <tr>
+                  <th className="p-3.5">{t({ hi: "रसीद नंबर", en: "Receipt #" })}</th>
+                  <th className="p-3.5">{t({ hi: "दानदाता", en: "Donor" })}</th>
+                  <th className="p-3.5">{t({ hi: "अभियान", en: "Campaign" })}</th>
+                  <th className="p-3.5">{t({ hi: "राशि", en: "Amount" })}</th>
+                  <th className="p-3.5">{t({ hi: "दिनांक", en: "Date" })}</th>
+                  <th className="p-3.5 text-right">{t({ hi: "PDF / विवरण", en: "PDF / Details" })}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {filtered.map((r) => (
+                  <tr key={r.id} className="hover:bg-muted/30 transition-colors">
+                    {/* Receipt number */}
+                    <td className="p-3.5 font-mono text-xs whitespace-nowrap">
+                      <span className="rounded bg-muted px-2 py-1 font-semibold">{r.receiptNumber}</span>
+                      {r.testMode && (
+                        <span className="ml-1.5 rounded bg-turmeric/20 px-1 py-0.5 text-[10px] font-semibold text-foreground/70">TEST</span>
+                      )}
+                    </td>
+                    {/* Donor */}
+                    <td className="p-3.5 max-w-[160px]">
+                      <p className="font-semibold truncate">{r.donorName}</p>
+                      <p className="text-xs text-muted-foreground truncate">{r.donorEmail}</p>
+                      {r.donorPanLast4 && (
+                        <p className="text-[11px] font-mono text-muted-foreground/70">••••{r.donorPanLast4}</p>
+                      )}
+                    </td>
+                    {/* Campaign */}
+                    <td className="p-3.5 text-xs text-muted-foreground max-w-[130px]">
+                      <span className="truncate block">{t(r.campaign.title)}</span>
+                    </td>
+                    {/* Amount */}
+                    <td className="p-3.5 font-semibold whitespace-nowrap text-leaf">
+                      {inr(r.amount)}
+                    </td>
+                    {/* Date */}
+                    <td className="p-3.5 text-xs text-muted-foreground whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <Calendar className="size-3" />
+                        <span>
+                          {new Date(r.generatedAt).toLocaleDateString("en-IN", {
+                            day: "numeric", month: "short", year: "numeric",
+                          })}
+                        </span>
+                      </div>
+                    </td>
+                    {/* Download + detail */}
+                    <td className="p-3.5 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <ReceiptDownloadButton receiptId={r.id} receiptNumber={r.receiptNumber} compact />
+                        <button
+                          onClick={() => setDetailReceipt(r)}
+                          className="inline-flex items-center gap-1 text-xs text-primary font-semibold hover:underline"
+                          title={t({ hi: "विवरण देखें", en: "View details" })}
+                        >
+                          <ChevronRight className="size-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+
+                {filtered.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan={6} className="p-10 text-center text-muted-foreground">
+                      <p className="font-semibold">
+                        {search || campaignFilter !== "all"
+                          ? t({ hi: "इन फ़िल्टर से कोई रसीद नहीं मिली।", en: "No receipts match your filters." })
+                          : t({ hi: "अभी कोई रसीद नहीं है।", en: "No receipts generated yet." })}
+                      </p>
+                      <p className="text-xs mt-1">
+                        {t({ hi: "/donate से सफल परीक्षण दान करें।", en: "Submit a successful test donation from /donate." })}
+                      </p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Receipt detail drawer */}
+      {detailReceipt && (
+        <ReceiptDetailDrawer receipt={detailReceipt} onClose={() => setDetailReceipt(null)} />
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// RECEIPT DOWNLOAD BUTTON (shared, used in table + drawer)
+// -------------------------------------------------------------
+
+// Re-declare with compact prop variant
+function ReceiptDownloadButton({
+  receiptId,
+  receiptNumber,
+  compact = false,
+}: {
+  receiptId: string;
+  receiptNumber: string;
+  compact?: boolean;
+}) {
+  const { t } = useLang();
+  const [busy, setBusy] = useState(false);
+  const [dlError, setDlError] = useState<string | null>(null);
+
+  const handleDownload = async () => {
+    setBusy(true);
+    setDlError(null);
+    try {
+      const blob = await downloadReceipt(receiptId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `SakhiSetu-${receiptNumber.replaceAll("/", "-")}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setDlError(err instanceof Error ? err.message : "PDF download failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (compact) {
+    return (
+      <div className="flex flex-col items-end gap-0.5">
+        <button
+          onClick={() => void handleDownload()}
+          disabled={busy}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-primary text-primary-foreground text-xs font-semibold disabled:opacity-50 hover:opacity-90"
+          title={t({ hi: "PDF डाउनलोड", en: "Download PDF" })}
+        >
+          <Save className="size-3.5" />
+          <span>{busy ? t({ hi: "…", en: "…" }) : "PDF"}</span>
+        </button>
+        {dlError && <p className="text-[10px] text-destructive max-w-[100px] text-right">{dlError}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-5 mb-4">
+      <button
+        onClick={() => void handleDownload()}
+        disabled={busy}
+        className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary text-primary-foreground px-4 py-2.5 text-sm font-semibold disabled:opacity-50 hover:opacity-90"
+      >
+        <FileText className="size-4" />
+        <span>{busy ? t({ hi: "PDF तैयार हो रही है…", en: "Generating PDF…" }) : t({ hi: "रसीद PDF डाउनलोड करें", en: "Download Receipt PDF" })}</span>
+      </button>
+      {dlError && (
+        <p role="alert" className="mt-2 text-xs text-destructive text-center">{dlError}</p>
+      )}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// RECEIPT DETAIL DRAWER
+// -------------------------------------------------------------
+
+function ReceiptDetailDrawer({ receipt: r, onClose }: { receipt: AdminReceipt; onClose: () => void }) {
+  const { t } = useLang();
+
+  const rows: Array<[{ hi: string; en: string }, string]> = [
+    [{ hi: "रसीद नंबर", en: "Receipt Number" }, r.receiptNumber],
+    [{ hi: "रसीद दिनांक", en: "Receipt Date" }, new Date(r.generatedAt).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium" })],
+    [{ hi: "दान ID", en: "Donation ID" }, r.donationId],
+    [{ hi: "दानदाता नाम", en: "Donor Name" }, r.donorName],
+    [{ hi: "दानदाता ईमेल", en: "Donor Email" }, r.donorEmail],
+    [{ hi: "PAN (अंतिम 4)", en: "PAN (last 4)" }, r.donorPanLast4 ? `••••${r.donorPanLast4}` : t({ hi: "उपलब्ध नहीं", en: "Not available" })],
+    [{ hi: "राशि", en: "Amount" }, inr(r.amount)],
+    [{ hi: "प्रकार", en: "Type" }, r.frequency === "MONTHLY" ? t({ hi: "मासिक", en: "Monthly" }) : t({ hi: "एकमुश्त", en: "One-time" })],
+    [{ hi: "अभियान", en: "Campaign" }, t(r.campaign.title)],
+    [{ hi: "भुगतान दिनांक", en: "Paid At" }, r.paidAt ? new Date(r.paidAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" }) : "—"],
+    [{ hi: "परीक्षण मोड", en: "Test Mode" }, r.testMode ? t({ hi: "हाँ (MOCK)", en: "Yes (MOCK)" }) : t({ hi: "नहीं", en: "No" })],
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-end bg-black/50 backdrop-blur-xs" onClick={onClose}>
+      <div
+        className="h-full w-full max-w-md bg-card shadow-2xl overflow-y-auto animate-in slide-in-from-right-8 flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between p-5 border-b sticky top-0 bg-card z-10 shrink-0">
+          <div>
+            <h3 className="font-display text-xl">{t({ hi: "रसीद विवरण", en: "Receipt Details" })}</h3>
+            <p className="font-mono text-xs text-muted-foreground mt-0.5">{r.receiptNumber}</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted text-muted-foreground shrink-0">
+            <X className="size-5" />
+          </button>
+        </div>
+
+        {/* Test mode warning */}
+        <div className="mx-5 mt-4 rounded-xl bg-turmeric/20 px-4 py-2.5 text-xs font-semibold text-foreground">
+          {t({
+            hi: "TEST / PREVIEW — यह कर-छूट के लिए मान्य आधिकारिक रसीद नहीं है।",
+            en: "TEST / PREVIEW — This is not a valid official receipt for tax purposes.",
+          })}
+        </div>
+
+        {/* Detail rows */}
+        <div className="p-5 flex-1 space-y-0">
+          {rows.map(([label, value]) => (
+            <div key={label.en} className="flex items-start justify-between gap-4 py-3 border-b last:border-0">
+              <span className="text-xs font-semibold text-muted-foreground shrink-0 w-32">{t(label)}</span>
+              <span className="text-xs font-medium text-right break-all">{value}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Download button */}
+        <div className="shrink-0 pb-2">
+          <ReceiptDownloadButton receiptId={r.id} receiptNumber={r.receiptNumber} />
+        </div>
+
+        {/* Footer note */}
+        <div className="px-5 pb-5 shrink-0">
+          <p className="text-[11px] text-muted-foreground">
+            {t({
+              hi: "रसीद PDF में Trust PAN और 80G पंजीकरण placeholder हैं जब तक ट्रस्ट द्वारा सत्यापित नहीं किए जाते।",
+              en: "The receipt PDF uses placeholder Trust PAN and 80G registration fields until formally verified by the trust.",
+            })}
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -1479,6 +1912,11 @@ function DonationDetailDrawer({ donation: d, onClose }: { donation: AdminDonatio
             </div>
           ))}
         </div>
+
+        {/* Receipt download — admin uses isAdmin gate, no token needed */}
+        {d.receipt && d.status === "SUCCEEDED" && (
+          <ReceiptDownloadButton receiptId={d.receipt.id} receiptNumber={d.receipt.receiptNumber} />
+        )}
 
         {/* Failed payment explanation */}
         {d.status === "FAILED" && (
