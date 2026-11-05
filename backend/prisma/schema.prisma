@@ -150,3 +150,17 @@ model SiteSetting {
   value     Json
   updatedAt DateTime @updatedAt
 }
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  adminId     String?
+  adminEmail  String
+  action      String
+  targetType  String?
+  targetId    String?
+  details     Json?
+  createdAt   DateTime @default(now())
+
+  @@index([action, createdAt(sort: Desc)])
+  @@index([adminEmail, createdAt(sort: Desc)])
+}

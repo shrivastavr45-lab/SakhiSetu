@@ -22,7 +22,7 @@ const envSchema = z.object({
   COOKIE_SECURE: z.string().default("false").transform((value) => value === "true"),
   PAYMENT_MODE: z.enum(["mock"]).default("mock"),
   GEMINI_API_KEY: z.string().optional().default(""),
-  GEMINI_MODEL: z.string().default("gemini-flash-latest"),
+  GEMINI_MODEL: z.string().default("gemini-3.5-flash"),
   PDF_FONT_PATH: z.string().default(""),
   PII_ENCRYPTION_KEY: z.string().default(""),
   TRUST_NAME: z.string().default("SakhiSetu Demo Trust"),

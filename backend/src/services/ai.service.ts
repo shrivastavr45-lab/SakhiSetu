@@ -9,34 +9,56 @@ function aiClient() {
   return new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 }
 
+const FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.8-flash"];
+
 async function generateText(systemInstruction: string, contents: string): Promise<string> {
   const ai = aiClient();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => reject(new AppError(504, "AI_TIMEOUT", "The assistant took too long to respond. Please try again.")), 15_000);
-    });
-    const result = await Promise.race([
-      ai.models.generateContent({
-        model: env.GEMINI_MODEL,
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.2,
-        },
-      }),
-      timeoutPromise,
-    ]);
-    const text = result.text?.trim();
-    if (!text) throw new AppError(502, "AI_EMPTY_RESPONSE", "The assistant could not form a reliable answer. Please check the listed scheme details or contact the trust through its verified channels.");
-    return text;
-  } catch (error) {
-    if (error instanceof AppError) throw error;
-    console.error("Gemini provider error:", error);
-    throw new AppError(502, "AI_PROVIDER_ERROR", "The assistant is temporarily unavailable. Please try again or use the trust's verified contact details.");
-  } finally {
-    if (timeout) clearTimeout(timeout);
+  const candidateModels = [
+    env.GEMINI_MODEL,
+    ...FALLBACK_MODELS.filter((m) => m !== env.GEMINI_MODEL),
+  ];
+
+  let lastError: unknown;
+
+  for (const model of candidateModels) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new AppError(504, "AI_TIMEOUT", `Model ${model} timed out.`)), 15_000);
+      });
+
+      const result = await Promise.race([
+        ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction,
+            temperature: 0.2,
+            thinkingConfig: {
+              thinkingBudget: 0,
+            },
+          },
+        }),
+        timeoutPromise,
+      ]);
+
+      const text =
+        result.text?.trim() ??
+        result.candidates?.[0]?.content?.parts?.map((p) => p.text).filter(Boolean).join("\n").trim();
+
+      if (text) return text;
+      console.warn(`Gemini model ${model} produced an empty response, attempting fallback.`);
+    } catch (error) {
+      console.warn(`Gemini model ${model} request failed:`, error instanceof Error ? error.message : error);
+      lastError = error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
+
+  if (lastError instanceof AppError) throw lastError;
+  console.error("All Gemini provider models failed:", lastError);
+  throw new AppError(502, "AI_PROVIDER_ERROR", "The assistant is temporarily unavailable. Please try again or use the trust's verified contact details.");
 }
 
 export async function askSchemeAssistant(message: string, language: "hi" | "en") {

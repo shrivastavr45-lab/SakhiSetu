@@ -55,14 +55,17 @@ export async function findScheme(id: string) {
 }
 
 export async function createScheme(input: {
-  id?: string; need: string; name: Localized; dept?: Localized; short?: Localized; benefit?: Localized;
+  id?: string; code?: string | null; need: string; name: Localized; dept?: Localized; short?: Localized; benefit?: Localized;
   eligibility?: Localized[]; documents?: Localized[]; steps?: Localized[]; rules?: Record<string, unknown>;
   districts?: "all" | string[]; sourceUrl?: string | null; officialNoticeText?: string | null;
+  published?: boolean; lastCheckedAt?: string | Date | null;
 }) {
-  const id = input.id ?? `scheme-${randomUUID()}`;
+  const id = input.id ?? `scheme-${randomUUID().slice(0, 8)}`;
+  const lastChecked = input.lastCheckedAt ? new Date(input.lastCheckedAt) : (input.sourceUrl ? new Date() : null);
   const row = await prisma.scheme.create({
     data: {
       id,
+      code: input.code?.trim() || null,
       need: input.need,
       nameHi: input.name.hi,
       nameEn: input.name.en,
@@ -79,28 +82,35 @@ export async function createScheme(input: {
       districts: (input.districts ?? "all") as Prisma.InputJsonValue,
       sourceUrl: input.sourceUrl ?? null,
       officialNoticeText: input.officialNoticeText ?? null,
-      published: false,
+      lastCheckedAt: lastChecked,
+      published: input.published ?? false,
     },
   });
   return presentScheme(row, true);
 }
 
 export async function updateScheme(id: string, input: {
-  need?: string; name?: Localized; dept?: Localized; short?: Localized; benefit?: Localized;
+  code?: string | null; need?: string; name?: Localized; dept?: Localized; short?: Localized; benefit?: Localized;
   eligibility?: Localized[]; documents?: Localized[]; steps?: Localized[]; rules?: Record<string, unknown>;
   districts?: "all" | string[]; sourceUrl?: string | null; officialNoticeText?: string | null; published?: boolean;
+  lastCheckedAt?: string | Date | null;
 }) {
   const current = await prisma.scheme.findUnique({ where: { id } });
   if (!current) throw new AppError(404, "SCHEME_NOT_FOUND", "Scheme not found.");
   if (input.published === true && current.aiSummaryDraftHi && !current.aiSummaryApproved) {
     throw new AppError(409, "AI_SUMMARY_REVIEW_REQUIRED", "Review and approve the pending Hindi AI summary before publishing this scheme.");
   }
-  const { name, dept, short, benefit, eligibility, documents, steps, rules, districts, ...rest } = input;
+  const { name, dept, short, benefit, eligibility, documents, steps, rules, districts, code, lastCheckedAt, ...rest } = input;
+  const computedLastChecked = lastCheckedAt !== undefined
+    ? (lastCheckedAt ? new Date(lastCheckedAt) : null)
+    : (input.sourceUrl !== undefined ? (input.sourceUrl ? new Date() : null) : undefined);
+
   const row = await prisma.scheme.update({
     where: { id },
     data: {
       ...rest,
-      ...(input.sourceUrl !== undefined ? { lastCheckedAt: input.sourceUrl ? new Date() : null } : {}),
+      ...(code !== undefined ? { code: code?.trim() || null } : {}),
+      ...(computedLastChecked !== undefined ? { lastCheckedAt: computedLastChecked } : {}),
       ...(name ? { nameHi: name.hi, nameEn: name.en } : {}),
       ...(dept ? { deptHi: dept.hi, deptEn: dept.en } : {}),
       ...(short ? { shortHi: short.hi, shortEn: short.en } : {}),

@@ -62,6 +62,7 @@ export const donationSchema = z.object({
 
 export const createSchemeSchema = z.object({
   id: z.string().trim().min(2).max(80).regex(/^[a-zA-Z0-9-]+$/).optional(),
+  code: z.string().trim().max(40).optional().nullable(),
   need: z.enum(["money", "health", "work", "education", "housing"]),
   name: z.object({ hi: z.string().trim().min(2).max(180), en: z.string().trim().min(2).max(180) }),
   dept: z.object({ hi: z.string().max(180), en: z.string().max(180) }).optional(),
@@ -81,6 +82,8 @@ export const createSchemeSchema = z.object({
     }
   }, "Source URL must use HTTP or HTTPS.").optional().nullable(),
   officialNoticeText: z.string().max(30000).optional().nullable(),
+  lastCheckedAt: z.string().datetime().optional().nullable(),
+  published: z.boolean().optional(),
 }).strict();
 
 export const updateSchemeSchema = createSchemeSchema.omit({ id: true }).partial().extend({

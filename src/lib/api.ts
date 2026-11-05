@@ -137,3 +137,49 @@ export const askAssistant = (message: string, language: "hi" | "en") => request<
 export const draftSchemeSummary = (id: string) => request<{ schemeId: string; draft: string; status: string }>(`/admin/ai/schemes/${encodeURIComponent(id)}/summary-draft`, { method: "POST" });
 export const approveSchemeSummary = (id: string) => request<Scheme>(`/admin/ai/schemes/${encodeURIComponent(id)}/summary-approve`, { method: "POST" });
 export const dismissSchemeSummary = (id: string) => request<{ dismissed: boolean }>(`/admin/ai/schemes/${encodeURIComponent(id)}/summary-dismiss`, { method: "POST" });
+
+export type AdminOverviewData = {
+  stats: {
+    totalSuccessfulAmount: number;
+    successfulDonationsCount: number;
+    uniqueDonorsCount: number;
+    activeCampaignsCount: number;
+    totalCampaignsCount: number;
+    publishedSchemesCount: number;
+    totalSchemesCount: number;
+    pendingDonationsCount: number;
+    failedDonationsCount: number;
+  };
+  recentDonations: Array<{
+    id: string;
+    donorName: string;
+    donorEmail: string;
+    amount: number;
+    frequency: "ONE_TIME" | "MONTHLY";
+    status: "SUCCEEDED" | "PENDING" | "FAILED";
+    campaignId: string;
+    campaignTitle: L;
+    receiptNumber: string | null;
+    createdAt: string;
+  }>;
+  campaignCollections: Array<{
+    id: string;
+    title: L;
+    district: string;
+    emoji: string;
+    active: boolean;
+    goalAmount: number;
+    collectedAmount: number;
+    donationCount: number;
+    remainingAmount: number;
+    progressPercent: number;
+  }>;
+  monthlyTrends: Array<{
+    monthKey: string;
+    monthLabel: string;
+    amount: number;
+    count: number;
+  }>;
+};
+
+export const getAdminOverview = () => request<AdminOverviewData>("/admin/overview");
