@@ -1,8 +1,8 @@
 # SakhiSetu implementation status
 
-**Snapshot:** 5 November 2026 (updated after Checkpoint 6)
+**Snapshot:** 5 November 2026 (final — Checkpoint 8 QA complete)
 **Workspace:** `sakhi-scheme-spark-main`
-**Overall state:** Admin dashboard checkpoints 1–6 implemented and typechecked. Backend and frontend pass TypeScript strict-mode checks. 76 backend unit tests pass. End-to-end browser acceptance requires a running PostgreSQL instance and `npm install`.
+**Overall state:** All 8 admin dashboard checkpoints implemented. Backend and frontend pass TypeScript strict-mode checks. 121 backend unit tests pass. All user journeys verified by code-level audit. End-to-end browser acceptance requires a running PostgreSQL instance and `npm install`.
 
 ## Admin dashboard checkpoint progress
 
@@ -17,7 +17,41 @@
 | CP7 | Reports & analytics | **Complete** |
 | CP8 (Settings) | Settings — trust banner, audit log | **Complete** |
 
-## Acceptance matrix
+## User journey verification (Checkpoint 8 — code-level audit)
+
+All journeys verified by reading the source code end-to-end (frontend route → API client → backend route → controller → service → Prisma). No browser runtime testing was possible in this environment.
+
+| # | Journey | Status | Evidence |
+|---|---|---|---|
+| 1 | Browse schemes | **Complete** | `schemes.index.tsx` → `getSchemes({need,district,q})` → `GET /api/schemes` → `listPublicSchemes` → `listSchemes({published:true})`; need pill filters, district select, search, result count all wired |
+| 2 | Scheme detail | **Complete** | `schemes.$id.tsx` → `getScheme(id)` → `GET /api/schemes/:id` → `findScheme` (throws 404 for unpublished); renders eligibility, documents, steps, source URL, lastCheckedAt, speak button |
+| 3 | Eligibility finder | **Complete** | `finder.tsx` → 6 questions + need + district → `checkEligibility(profile)` → `POST /api/eligibility` → `evaluateEligibility()` in `eligibility-rules.ts`; age bands, boolean rules, district match, unansweredRules all implemented and unit-tested |
+| 4 | Admin login | **Complete** | `admin.tsx` login form → `login()` → `POST /api/auth/login` → `verifyLogin()` → `setSessionCookie()`; checks `role !== ADMIN` and rejects donors with logout |
+| 5 | Admin scheme management | **Complete** | `SchemesSection` + `SchemeModal` → `createAdminScheme/updateAdminScheme/deleteAdminScheme` → `POST/PATCH/DELETE /api/admin/schemes`; AI workflow via `draftSchemeSummary/approveSchemeSummary/dismissSchemeSummary` → `POST /api/admin/ai/schemes/:id/summary-*` |
+| 6 | Admin campaign management | **Complete** | `CampaignsSection` + `CampaignGoalModal` → `updateAdminCampaign({goalAmount,active})` → `PATCH /api/admin/campaigns/:id` |
+| 7 | Donor registration | **Complete** | `account.tsx` → `registerDonor({name,email,password})` → `POST /api/auth/register` → `registerDonor()` service → bcrypt hash + `prisma.user.create(role=DONOR)` |
+| 8 | Mock one-time donation | **Complete** | `donate.tsx` → `createDonation(payload, idempotencyKey)` → `POST /api/donations` with `Idempotency-Key` header → `createTestDonation()` → `createOrReadDonation()` in ReadCommitted transaction; `PAYMENT_MODE !== "mock"` throws 503 |
+| 9 | Receipt PDF download | **Complete** | `donate.tsx` Success → `downloadReceipt(receipt.id, downloadToken)` → `GET /api/receipts/:id.pdf` → `receiptPdf()` → PDFKit A4 with TEST/PREVIEW watermark, DEMO footer, donor/trust details; `isOwner/isAdmin/isTokenValid` auth gates |
+| 10 | Donor history | **Complete** | `account.tsx` → `getMyDonations()` → `GET /api/donations/mine` → `listMyDonations(userId)` scoped to authenticated user; shows receipt numbers + PDF download buttons |
+| 11 | Reports & Form 10BD | **Complete** | `ReportsSection` → `getAdminReportSummary()` → `GET /admin/reports/summary` → `getAdminReportSummary()` service (all-time stats, 12-month trends, campaign breakdown); `downloadForm10BdCsv(fy)` → `GET /admin/reports/form-10bd.csv?fy=YYYY-YY` with DEMO/TEST header on every line |
+| 12 | Hindi/English switching | **Complete** | `i18n.tsx` `LangProvider` with localStorage persistence; `SiteShell.tsx` language toggle (हिंदी/English); 309+ bilingual `t({hi,en})` calls in admin.tsx alone; Hindi is default |
+| 13 | Settings (banner + audit log) | **Complete** | `SettingsSection` → `getHomepageBanner()` on load → banner rendered on `index.tsx` homepage; `updateHomepageBanner()` on save; `getAuditLog(50)` → `GET /admin/settings/audit-log` → table with action, target, admin email, IST timestamp |
+
+## Security verification
+
+| Check | Status | Evidence |
+|---|---|---|
+| Admin APIs reject unauthorised users | **Verified** | All `/api/admin/*` routers apply `authenticate + requireRole(UserRole.ADMIN)`; 7 admin route files checked, all have 2 guard references each |
+| No .env files committed | **Verified** | `git ls-files` shows only `.env.example` and `backend/.env.example` tracked; `.gitignore` excludes `.env`, `.env.*`, `backend/.env`, `backend/.env.*` |
+| No real payment processed | **Verified** | `env.PAYMENT_MODE` is `z.enum(["mock"]).default("mock")` — only "mock" accepted; `createOrReadDonation` throws `503 PAYMENT_MODE_UNAVAILABLE` if not mock; all donations have `testMode: true` |
+| Demo receipts marked TEST/DEMO | **Verified** | `receiptPdf()` renders "TEST / PREVIEW — NOT VALID FOR TAX CLAIMS" header and "DEMO DOCUMENT — DO NOT SUBMIT TO THE INCOME TAX DEPARTMENT" footer in red |
+| Form 10BD exports marked DEMO | **Verified** | `buildForm10BdCsv()` writes "DEMO / TEST DATA — NOT FOR OFFICIAL FILING" on first line; every row has TEST MODE = YES column |
+| PAN never exposed in full | **Verified** | `decryptPan()` only used inside `receiptPdf()` for PDF content; API responses return `donorPanLast4` only; admin UI masks as `••••1234` |
+| JWT in HttpOnly cookie | **Verified** | `setSessionCookie()` uses `httpOnly: true, sameSite: "lax", path: "/api"`; no token in localStorage or response body |
+| Rate limits on auth + AI | **Verified** | `authLimiter` (20 req/15min) on `/api/auth`; `aiLimiter` (12 req/min) on `/api/assistant` |
+| Helmet + CORS | **Verified** | `app.use(helmet(...))` and `app.use(cors({origin: env.FRONTEND_ORIGIN, credentials: true}))` |
+| Zod validation on all write endpoints | **Verified** | `validateBody()` applied to register, login, donation, createScheme, updateScheme, updateCampaign, assistant, banner schemas; all `.strict()` to reject unknown fields |
+| Production env guards | **Verified** | `env.ts` throws if `JWT_SECRET` is placeholder, `PII_ENCRYPTION_KEY` not 64-hex, `COOKIE_SECURE` false, `FRONTEND_ORIGIN` not HTTPS, `ADMIN_PASSWORD` is demo, `TRUST_PAN` is placeholder |
 
 | ID | Requirement | Current state | Evidence / limitation |
 |---|---|---|---|
