@@ -13,6 +13,9 @@ backend/node_modules/
 # Build files
 dist/
 backend/dist/
+.output/
+.wrangler/
+.nitro/
 
 # Logs
 *.log

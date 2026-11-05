@@ -57,7 +57,7 @@ All journeys verified by reading the source code end-to-end (frontend route → 
 |---|---|---|---|
 | A1 | Existing frontend inspection and map | **Implemented** | `docs/frontend-backend-map.md`; React/TanStack routes inspected |
 | A2 | Separate TypeScript backend | **Typechecked: 0 errors** | `node_modules/.bin/tsc --noEmit -p backend/tsconfig.json` passes with strict mode, exactOptionalPropertyTypes, noUncheckedIndexedAccess |
-| A3 | PostgreSQL + Prisma migrations | **Implemented, not DB-verified** | `backend/prisma/schema.prisma`, SQL migration and seed exist; requires live PostgreSQL |
+| A3 | PostgreSQL + Prisma migrations | **Connected** | `prisma.$queryRaw\`SELECT 1\`` returns OK against Neon PostgreSQL (ap-southeast-1); Prisma client generated; migrations applied |
 | A4 | Registration/login/JWT/bcrypt/authorization | **Implemented, not integration-tested** | Auth routes, bcrypt hashing, HttpOnly cookie, role lookup and API middleware |
 | A5 | Scheme listing/search/detail | **Implemented** | Public scheme endpoints with full CRUD admin; CP2 typecheck clean |
 | A6 | Deterministic eligibility | **Unit-tested** | 14 eligibility tests pass covering age bands, districts, boolean rules |
@@ -71,40 +71,43 @@ All journeys verified by reading the source code end-to-end (frontend route → 
 | A14 | Input validation | **Implemented** | Zod request schemas on backend; form-side validation in all admin modals |
 | A15 | Central error handling | **Implemented** | Express async wrapper, AppError, Prisma error mapping, centralized errorHandler |
 | A16 | Backend test suite | **121/121 pass** | Covers eligibility, idempotency, financial year / receipt formatting, donation status, donor aggregation / search / sort / PAN, receipt token derivation, access-control, safeEqualHex, sha256, PDF font selection, monthly-trend gap-fill, campaign breakdown, Form 10BD CSV, FY validation, disclaimer requirements |
-| A17 | Frontend and browser journeys | **Requires npm install + PostgreSQL** | All TypeScript passes; browser testing instructions provided in each checkpoint |
+| A17 | Frontend and browser journeys | **TypeScript + build pass; browser untested** | `vite build` succeeds (client + SSR + Nitro); `vitest run` passes 4/4; browser end-to-end testing not performed |
 | A18 | Security checks | **Source-reviewed** | JWT, HttpOnly cookie, ADMIN role guard, bcrypt, rate limits, Helmet, CORS, AES-256-GCM PAN encryption, timing-safe token comparison, strict Zod schemas, no committed real secrets |
-| A19 | Frontend/backend production builds | **Typechecks pass; runtime build untested** | Requires `npm install` and `node_modules/.bin/tsc -p backend/tsconfig.json` for compiled output |
+| A19 | Frontend/backend production builds | **Both pass** | Frontend: `npm run build` (vite build) succeeds — 1913 client modules + 77 SSR modules + Nitro server; Backend: `npm run build:backend` (tsc -p backend/tsconfig.json) succeeds with 0 errors |
 | A20 | Documentation | **Updated** | IMPLEMENTATION_STATUS.md, README.md, deployment.md updated to reflect all 8 admin checkpoints complete |
 
-## Checks executed
+## Checks executed (final verification — 5 November 2026)
 
 ### Passed
 
-- `node --experimental-strip-types --test backend/tests/*.test.mjs` — **14 tests passed, 0 failed**.
-- TypeScript transpile/syntax pass over **105 `.ts` / `.tsx` source files** (excluding the declaration-only `.d.ts`) using the globally installed TypeScript compiler API — no syntax diagnostics. A separate Node strip-types syntax check passed across the backend `.ts` files.
+| Command | Result |
+|---|---|
+| `node --experimental-strip-types --test backend/tests/*.test.mjs` | **121/121 pass, 0 fail** (6 test files: donation-helpers, eligibility, admin-donations, donor-records, receipt, reports) |
+| `npx vitest run` | **4/4 pass, 0 fail** (2 test files: data.test.ts, app-routing.test.tsx) |
+| `node_modules/.bin/tsc --noEmit -p tsconfig.json` (frontend) | **0 errors** (strict mode, exactOptionalPropertyTypes, noUncheckedIndexedAccess) |
+| `node_modules/.bin/tsc --noEmit -p backend/tsconfig.json` (backend) | **0 errors** (same strict settings) |
+| `npm run build` (frontend) | **Succeeded** — Vite build: 1913 client modules transformed, SSR + Nitro server built, `.output/` generated |
+| `npm run build:backend` (backend) | **Succeeded** — `tsc -p backend/tsconfig.json` compiled with 0 errors |
+| Database connectivity | **Connected OK** — `prisma.$queryRaw\`SELECT 1\`` returns OK against Neon PostgreSQL (ap-southeast-1) |
+| Prisma client | **Generated** — `node_modules/.prisma/client/index.js` present |
 
 ### Not executed / not verified
 
-- `npm install --no-audit --no-fund` — command timed out; a direct registry probe returned `Could not resolve host: registry.npmjs.org`. No complete dependency tree was installed. The inherited `bun.lock` was not regenerated because Bun is unavailable; npm is the documented installation path and no `package-lock.json` has been generated in this workspace.
-- `npm test` / Vitest — attempted; blocked with `vitest: not found` because frontend dependencies are absent.
-- `tsc --noEmit -p backend/tsconfig.json` and `npm run build:backend` were attempted; both stop with `TS2688: Cannot find type definition file for node`. Project dependencies are not installed, so semantic typechecking and production compilation remain blocked.
-- `prisma validate`, `prisma generate`, `prisma migrate`, `prisma db seed` — not run; Prisma CLI/client dependencies and a PostgreSQL server are unavailable.
-- API integration tests — not run; Express/Prisma packages and PostgreSQL unavailable.
-- PDF render/content test — not run; PDFKit dependency unavailable.
-- Live Gemini test — not run; no `GEMINI_API_KEY` supplied.
-- Browser end-to-end tests — not run; no browser automation or installed frontend dependencies.
-- Load/concurrency test for 5,000 donations/day — not run; no PostgreSQL/infra/load-test environment.
+- Browser end-to-end testing — not performed; no browser automation run. All journeys verified by code-level audit only.
+- Load/concurrency test for 5,000 donations/day — not run; no load-test environment.
+- Live Gemini test — not run; `GEMINI_API_KEY` is configured but live API call was not tested.
+- PDF generation with Devanagari font — code path verified by unit tests; real PDF with Hindi text requires `PDF_FONT_PATH` to a Noto Sans Devanagari TTF (not configured in this environment).
 
 ## External blockers and required follow-up
 
-1. Install npm packages in a network-enabled environment (`npm install`).
-2. Provision PostgreSQL 14+ (or a supported current PostgreSQL release), set `DATABASE_URL`, then run Prisma generate, migrations and seed.
-3. Configure non-demo `JWT_SECRET`, `PII_ENCRYPTION_KEY`, `TRUST_PAN`, `TRUST_80G_REGISTRATION`, and secure cookie/CORS settings before production.
-4. Obtain and configure a valid Gemini API key for live assistant tests.
-5. Supply a Noto Sans Devanagari-compatible `.ttf` and set `PDF_FONT_PATH` before generating PDFs containing Devanagari donor names.
+1. ~~Install npm packages~~ — **Done.** `node_modules` present; all dependencies resolved.
+2. ~~Provision PostgreSQL~~ — **Done.** Neon PostgreSQL connected; `DATABASE_URL` set in `backend/.env`; Prisma client generated and migrations applied.
+3. Configure non-demo `JWT_SECRET`, `PII_ENCRYPTION_KEY`, `TRUST_PAN`, `TRUST_80G_REGISTRATION`, and secure cookie/CORS settings before production. — `JWT_SECRET` is set in `backend/.env`; `PII_ENCRYPTION_KEY` uses dev fallback; `TRUST_PAN` and `TRUST_80G_REGISTRATION` remain demo placeholders.
+4. Obtain and configure a valid Gemini API key for live assistant tests. — `GEMINI_API_KEY` is set in `backend/.env`; live API call not tested.
+5. Supply a Noto Sans Devanagari-compatible `.ttf` and set `PDF_FONT_PATH` before generating PDFs containing Devanagari donor names. — Not configured in this environment.
 6. Have the trust verify official scheme source URLs, benefit rules, district coverage, document lists, application instructions, help-centre details, trust identity and actual 80G registration.
 7. Provide the actual GitHub repository URL and deployed app URL; neither was supplied and no deployment was created here.
-8. Recover/preserve commit history from the original repository: the uploaded ZIP contained no `.git` directory, so this workspace cannot reconstruct the previous commit history.
+8. Browser end-to-end testing — not performed. All 13 user journeys verified by code-level audit only.
 
 ## Demo-only / intentionally cut scope
 
@@ -115,18 +118,48 @@ All journeys verified by reading the source code end-to-end (frontend route → 
 - Form 10BD export, donor messaging, SMS/email receipts, reminder scheduling, live payment gateway, FCRA flows, volunteer management, CSR/grant tracking and voice-based finder input are not implemented.
 - AI summaries require official notice text, are draft-only until admin approval, and the assistant cannot decide eligibility.
 
-## Next verification sequence
+## Next verification sequence (for a fresh reviewer)
 
 ```bash
-npm install
-cp backend/.env.example backend/.env
-# Edit backend/.env with a local PostgreSQL URL and fresh local secrets.
+# Dependencies are already installed in this workspace.
+# backend/.env already exists with DATABASE_URL, JWT_SECRET, GEMINI_API_KEY set.
+
+# 1. Regenerate Prisma client (if needed)
 npm run db:generate
-npm run db:migrate:dev
+
+# 2. Apply migrations
+npm run db:migrate
+
+# 3. Seed demo data
 npm run db:seed
+
+# 4. Run backend tests (121 tests)
 npm run test:backend
+
+# 5. Run frontend tests (4 tests)
 npm test
-npm run build:all
+
+# 6. Typecheck both
+node_modules/.bin/tsc --noEmit -p tsconfig.json        # frontend
+cd backend && node_modules/.bin/tsc --noEmit -p tsconfig.json  # backend
+
+# 7. Production builds
+npm run build           # frontend (vite build)
+npm run build:backend   # backend (tsc -p backend/tsconfig.json)
+
+# 8. Start backend in terminal 1
+npm run dev:backend
+
+# 9. Start frontend in terminal 2
+npm run dev
+
+# 10. Open the URL printed by Vite and test every route
+#     Sign in to /admin with admin@sakhisetu.test / SakhiDemo!2026
+#     Register a donor at /account, make a test donation at /donate
+#     Download the receipt PDF, check admin dashboard sections
 ```
 
-Then launch the API and frontend in separate terminals and exercise every route in `docs/frontend-backend-map.md`. Record actual results here before changing any item to fully tested.
+### Demo sign-in
+
+- Admin: `admin@sakhisetu.test` / `SakhiDemo!2026` (public demo credential, not a secret)
+- Donor: register a new account at `/account`
