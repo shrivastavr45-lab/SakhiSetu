@@ -96,19 +96,51 @@ function splitCsvLine(line: string): string[] {
  * Parse a raw CSV string into header-keyed row objects.
  * Returns canonical field keys (via HEADER_MAP) so consumers are decoupled
  * from the physical column order.
+ *
+ * Uses a character-level RFC-4180 state machine so embedded newlines inside
+ * quoted fields are handled correctly. The previous line-split approach
+ * (text.split(/\r?\n/)) destroyed multi-line fields and caused RangeError
+ * crashes when a fragment line was passed to splitCsvLine.
  */
 export function parseCsv(text: string): { headers: string[]; rows: CsvRow[] } {
-  const lines = (text.startsWith("\uFEFF") ? text.slice(1) : text).split(/\r?\n/);
-  if (lines.length === 0) return { headers: [], rows: [] };
+  const src = text.startsWith("\uFEFF") ? text.slice(1) : text;
+  if (!src.trim()) return { headers: [], rows: [] };
 
-  const rawHeaders = splitCsvLine(lines[0] ?? "");
+  // Build all logical rows using a state machine that tracks whether we are
+  // inside a quoted field — never splits on newlines while inQuotes is true.
+  const allRows: string[][] = [];
+  let field = "";
+  let row: string[] = [];
+  let inQuotes = false;
+
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') { field += '"'; i++; }   // escaped quote
+        else { inQuotes = false; }                         // closing quote
+      } else {
+        field += ch;                                       // char inside quoted field (may be \n)
+      }
+    } else {
+      if (ch === '"')  { inQuotes = true; }
+      else if (ch === ',') { row.push(field); field = ""; }
+      else if (ch === '\n') { row.push(field); allRows.push(row); row = []; field = ""; }
+      else if (ch !== '\r') { field += ch; }
+    }
+  }
+  // Flush last field / row
+  if (field || row.length > 0) { row.push(field); allRows.push(row); }
+
+  if (allRows.length === 0) return { headers: [], rows: [] };
+
+  const rawHeaders = allRows[0] ?? [];
   const headers = rawHeaders.map(mapHeader);
   const rows: CsvRow[] = [];
 
-  for (let li = 1; li < lines.length; li++) {
-    const line = lines[li];
-    if (!line?.trim()) continue;
-    const values = splitCsvLine(line);
+  for (let li = 1; li < allRows.length; li++) {
+    const values = allRows[li] ?? [];
+    if (!values.some((v) => v.trim())) continue; // skip blank rows
     const row: CsvRow = {};
     for (let hi = 0; hi < headers.length; hi++) {
       row[headers[hi] ?? `col_${hi}`] = values[hi]?.trim() ?? "";

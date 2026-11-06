@@ -2607,7 +2607,7 @@ function ImportSchemesModal({
       setImportResult(summary);
       setStage("done");
     } catch (err) {
-      setImportError(err instanceof Error ? err.message : "Import failed.");
+      setImportError(err instanceof Error ? err.message : "Import failed. Check the browser console for details.");
       setStage("preview"); // go back to preview so they can retry
     }
   };
