@@ -85,9 +85,13 @@ function SchemeDetail() {
       <div className="mt-4 text-xs text-muted-foreground space-y-1">
         <p>{t({ hi: "जानकारी केवल मार्गदर्शन हेतु है। अंतिम पात्रता सरकारी विभाग तय करता है।", en: "Information is for guidance only. Final eligibility is decided by the government department." })}</p>
         <p>{t({ hi: "ज़िला कवरेज डेमो मान्यता पर आधारित है; वास्तविक उपलब्धता की पुष्टि आवश्यक है।", en: "District coverage is an illustrative assumption and must be verified before use." })}</p>
-        {s.lastCheckedAt && <p>{t({ hi: "नमूना डेटा में दी गई जाँच तिथि: ", en: "Last-checked date supplied in sample data: " })}{new Date(s.lastCheckedAt).toLocaleDateString(lang === "hi" ? "hi-IN" : "en-IN")}</p>}
-        {s.sourceUrl ? <a href={s.sourceUrl} target="_blank" rel="noreferrer" className="underline text-primary">{t({ hi: "आधिकारिक स्रोत देखें", en: "View official source" })}</a> : <p>{t({ hi: "आधिकारिक स्रोत का URL उपलब्ध नहीं कराया गया है। विवरण प्रकाशित करने से पहले स्रोत की पुष्टि आवश्यक है।", en: "No official source URL was supplied. The details need source verification before operational use." })}</p>}
-        <p>{t({ hi: "दस्तावेज़ और आवेदन चरण इस नमूना रिकॉर्ड में उपलब्ध नहीं हैं।", en: "Document requirements and application steps were not supplied for this sample record." })}</p>
+        {s.lastCheckedAt && <p>{t({ hi: "अंतिम जाँच तिथि: ", en: "Last verified: " })}{new Date(s.lastCheckedAt).toLocaleDateString(lang === "hi" ? "hi-IN" : "en-IN")}</p>}
+        {s.sourceUrl
+          ? <a href={s.sourceUrl} target="_blank" rel="noreferrer" className="underline text-primary">{t({ hi: "आधिकारिक स्रोत देखें", en: "View official source" })}</a>
+          : <p>{t({ hi: "आधिकारिक स्रोत URL उपलब्ध नहीं। सत्यापन के लिए ट्रस्ट से संपर्क करें।", en: "No official source URL available. Contact the trust for verification." })}</p>}
+        {!s.documents.length && !s.steps.length && (
+          <p>{t({ hi: "दस्तावेज़ और आवेदन चरण इस रिकॉर्ड में उपलब्ध नहीं हैं। आधिकारिक स्रोत से पुष्टि करें।", en: "Document requirements and application steps are not available for this record. Confirm from the official source." })}</p>
+        )}
       </div>
     </div>
   );

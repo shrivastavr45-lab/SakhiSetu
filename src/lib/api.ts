@@ -54,13 +54,23 @@ export type DonationHistoryItem = {
   receipt: { id: string; receiptNumber: string } | null;
 };
 
-export async function getSchemes(filters: { q?: string; need?: string; district?: string; drafts?: boolean } = {}) {
+export type SchemeListResult = {
+  schemes: Scheme[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export async function getSchemes(filters: { q?: string; need?: string; district?: string; level?: string; drafts?: boolean; limit?: number; offset?: number } = {}) {
   const query = new URLSearchParams();
   if (filters.q) query.set("q", filters.q);
   if (filters.need) query.set("need", filters.need);
   if (filters.district) query.set("district", filters.district);
+  if (filters.level) query.set("level", filters.level);
+  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
+  if (filters.offset !== undefined) query.set("offset", String(filters.offset));
   const path = filters.drafts ? "/admin/schemes" : "/schemes";
-  return request<Scheme[]>(`${path}${query.size ? `?${query.toString()}` : ""}`);
+  return request<SchemeListResult>(`${path}${query.size ? `?${query.toString()}` : ""}`);
 }
 
 export const getScheme = (id: string) => request<Scheme>(`/schemes/${encodeURIComponent(id)}`);

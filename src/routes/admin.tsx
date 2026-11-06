@@ -234,8 +234,8 @@ function AdminDashboard() {
     setLoadingSchemes(true);
     setSchemesError(null);
     try {
-      const data = await getSchemes({ drafts: true });
-      setSchemes(data);
+      const result = await getSchemes({ drafts: true, limit: 1000, offset: 0 });
+      setSchemes(result.schemes);
     } catch (err) {
       setSchemesError(err instanceof Error ? err.message : "Failed to load schemes.");
     } finally {
@@ -3193,6 +3193,7 @@ function SchemesSection({
                   <th className="p-3.5">{t({ hi: "योजना का नाम व विवरण", en: "Scheme Name & Dept" })}</th>
                   <th className="p-3.5">{t({ hi: "कोड", en: "Code" })}</th>
                   <th className="p-3.5">{t({ hi: "श्रेणी", en: "Category" })}</th>
+                  <th className="p-3.5">{t({ hi: "स्तर", en: "Level" })}</th>
                   <th className="p-3.5">{t({ hi: "ज़िला कवरेज", en: "Districts" })}</th>
                   <th className="p-3.5">{t({ hi: "स्थिति", en: "Status" })}</th>
                   <th className="p-3.5">{t({ hi: "सत्यापित", en: "Last Checked" })}</th>
@@ -3240,6 +3241,21 @@ function SchemesSection({
                           <span aria-hidden>{needObj?.icon ?? "📋"}</span>
                           <span>{t(needObj?.name ?? { hi: scheme.need, en: scheme.need })}</span>
                         </span>
+                      </td>
+
+                      {/* Level */}
+                      <td className="p-3.5">
+                        {scheme.level
+                          ? <span className={`text-[11px] rounded-full px-2 py-0.5 font-semibold ${
+                              scheme.level === "Central Government"
+                                ? "bg-primary/10 text-primary"
+                                : "bg-turmeric/20 text-foreground"
+                            }`}>
+                              {scheme.level === "Central Government"
+                                ? t({ hi: "केंद्र", en: "Central" })
+                                : t({ hi: "राज्य", en: "State" })}
+                            </span>
+                          : <span className="text-muted-foreground text-xs">—</span>}
                       </td>
 
                       {/* Districts */}

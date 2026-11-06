@@ -43,17 +43,89 @@ export function presentScheme(scheme: {
   };
 }
 
-export async function listSchemes(filters: { q?: string; need?: string; district?: string; includeDrafts?: boolean }) {
-  const rows = await prisma.scheme.findMany({
-    where: filters.includeDrafts ? {} : { published: true },
-    orderBy: [{ published: "desc" }, { nameHi: "asc" }],
-  });
-  const query = filters.q?.trim().toLocaleLowerCase("hi-IN");
-  return rows
-    .filter((row) => !filters.need || row.need === filters.need)
-    .filter((row) => !filters.district || row.districts === "all" || (Array.isArray(row.districts) && row.districts.includes(filters.district)))
-    .filter((row) => !query || [row.nameHi, row.nameEn, row.shortHi, row.shortEn, row.benefitHi, row.benefitEn].some((value) => value.toLocaleLowerCase("hi-IN").includes(query)))
-    .map((row) => presentScheme(row, filters.includeDrafts === true));
+export async function listSchemes(filters: {
+  q?: string;
+  need?: string;
+  district?: string;
+  level?: string;
+  includeDrafts?: boolean;
+  limit?: number;
+  offset?: number;
+}) {
+  const limit = Math.min(filters.limit ?? 100, 500); // cap at 500 per page
+  const offset = filters.offset ?? 0;
+
+  // Build DB-level WHERE — use indexed columns to avoid full-table scans
+  const where: {
+    published?: boolean;
+    need?: string;
+    level?: string;
+    OR?: Array<Record<string, unknown>>;
+  } = filters.includeDrafts ? {} : { published: true };
+
+  if (filters.need) where.need = filters.need;           // uses @@index([published, need])
+  if (filters.level) where.level = filters.level;        // uses @@index([level])
+
+  // Text search: DB ILIKE is more efficient than loading all rows for substring match
+  // We push to an OR clause so it is composable with other filters.
+  if (filters.q) {
+    const q = `%${filters.q.trim().toLowerCase()}%`;
+    // Prisma doesn't support ILIKE directly in mode:"insensitive" for combined OR easily,
+    // so we use raw approach via contains with insensitive mode on each field.
+    const qTrimmed = filters.q.trim();
+    where.OR = [
+      { nameHi:   { contains: qTrimmed, mode: "insensitive" } },
+      { nameEn:   { contains: qTrimmed, mode: "insensitive" } },
+      { shortHi:  { contains: qTrimmed, mode: "insensitive" } },
+      { shortEn:  { contains: qTrimmed, mode: "insensitive" } },
+      { benefitHi:{ contains: qTrimmed, mode: "insensitive" } },
+      { benefitEn:{ contains: qTrimmed, mode: "insensitive" } },
+    ];
+    void q; // suppress unused warning
+  }
+
+  const [rows, totalCount] = await Promise.all([
+    prisma.scheme.findMany({
+      where,
+      orderBy: [{ published: "desc" }, { nameHi: "asc" }],
+      take: limit,
+      skip: offset,
+    }),
+    prisma.scheme.count({ where }),
+  ]);
+
+  // District filter: still applied in memory because the JSON districts column
+  // cannot be filtered efficiently with Prisma's typed queries. In practice,
+  // all imported schemes have districts="all", so this filter only removes
+  // a small fraction of rows.
+  const filtered = filters.district
+    ? rows.filter((row) =>
+        row.districts === "all" ||
+        (Array.isArray(row.districts) && (row.districts as string[]).includes(filters.district!))
+      )
+    : rows;
+
+  return {
+    schemes: filtered.map((row) => presentScheme(row, filters.includeDrafts === true)),
+    total: filters.district ? filtered.length : totalCount, // exact when no district filter
+    limit,
+    offset,
+  };
+}
+
+/**
+ * Backward-compatible wrapper — returns a flat array (used by eligibility service,
+ * AI assistant context builder, and tests that expect an array).
+ */
+export async function listSchemesAll(filters: {
+  q?: string;
+  need?: string;
+  district?: string;
+  level?: string;
+  includeDrafts?: boolean;
+}) {
+  const result = await listSchemes({ ...filters, limit: 500, offset: 0 });
+  return result.schemes;
 }
 
 export async function findScheme(id: string) {

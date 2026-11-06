@@ -31,7 +31,7 @@ function Index() {
     Promise.all([getSchemes(), getCampaigns(), getHomepageBanner()])
       .then(([schemeRows, campaignRows, setting]) => {
         if (!active) return;
-        setSchemes(schemeRows);
+        setSchemes(schemeRows.schemes);
         setCampaigns(campaignRows);
         setBanner(setting.text);
       })
