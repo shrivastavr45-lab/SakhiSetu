@@ -34,7 +34,10 @@ app.use(cors({
     "Idempotency-Key",
     "X-Receipt-Token",
     "Authorization",
-    "X-Test-Payment-Outcome",
+    // X-Test-Payment-Outcome is only meaningful in non-production environments
+    // (the donation controller ignores it in production), but we omit it from
+    // the CORS allowedHeaders in production to avoid advertising a test surface.
+    ...(env.NODE_ENV !== "production" ? ["X-Test-Payment-Outcome"] : []),
     "X-Import-Dry-Run",
   ],
 }));

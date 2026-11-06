@@ -1,0 +1,44 @@
+# SakhiSetu — Render service definitions
+# =========================================
+# NOTE: The frontend (TanStack Start / Nitro) is built for Cloudflare Workers and
+# must be deployed to Cloudflare Pages, NOT as a Render Static Site.
+# This file defines only the backend API service.
+#
+# Deploy the frontend via Cloudflare Pages:
+#   Build command : npm install && npm run build
+#   Output dir    : .output/public   (static assets served by Cloudflare CDN)
+#   Functions dir : .output/server   (Cloudflare Worker for SSR)
+# See deployment.md for the full step-by-step.
+
+services:
+  # ─────────────────────────────────────────────────────────────────
+  # SakhiSetu Express API — Render Web Service
+  # ─────────────────────────────────────────────────────────────────
+  - type: web
+    name: sakhisetu-api
+    runtime: node
+    region: singapore   # closest to Neon ap-southeast-1 (Singapore)
+    plan: free          # change to starter or above for production SLA
+
+    # Render checks out the repo root; backend/ is a sub-directory.
+    # All commands below are relative to the project root.
+    buildCommand: npm install && npm run build:backend && npm run db:generate
+    startCommand: npm run start:backend
+
+    # Render injects PORT automatically; our server reads process.env.PORT.
+    # All other variables must be set in the Render dashboard → Environment.
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        fromService:
+          name: sakhisetu-api
+          type: web
+          property: port
+
+    # Health-check: Render pings this path every 30 s to decide if the
+    # instance is healthy. Returns 200 when DB is reachable, 503 otherwise.
+    healthCheckPath: /api/health
+
+    # Auto-deploy on every push to main.
+    autoDeploy: true
