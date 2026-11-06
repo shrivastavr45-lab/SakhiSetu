@@ -27,7 +27,7 @@ export const importSchemesCsv: RequestHandler = async (req, res) => {
     throw new AppError(
       413,
       "IMPORT_FILE_TOO_LARGE",
-      `CSV body exceeds the ${IMPORT_MAX_BYTES / 1024 / 1024} MB limit. Split the file and re-import.`,
+      `CSV body exceeds the ${Math.round(IMPORT_MAX_BYTES / 1024 / 1024)} MB limit. Split the file and re-import.`,
     );
   }
 

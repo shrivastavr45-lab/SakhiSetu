@@ -98,7 +98,7 @@ function splitCsvLine(line: string): string[] {
  * from the physical column order.
  */
 export function parseCsv(text: string): { headers: string[]; rows: CsvRow[] } {
-  const lines = text.split(/\r?\n/);
+  const lines = (text.startsWith("\uFEFF") ? text.slice(1) : text).split(/\r?\n/);
   if (lines.length === 0) return { headers: [], rows: [] };
 
   const rawHeaders = splitCsvLine(lines[0] ?? "");
@@ -230,8 +230,9 @@ export function mapCsvRow(row: CsvRow): MappedRow {
 
   const rawLevel = (row["level"] ?? "").trim();
   const level: "Central Government" | "State Government" | null =
-    rawLevel === "Central Government" ? "Central Government"
-    : rawLevel === "State Government"  ? "State Government"
+    rawLevel === "Central Government"    ? "Central Government"
+    : rawLevel === "State Government"    ? "State Government"
+    : rawLevel === "State / UT Government" ? "State Government"
     : null;
 
   const rawSlug = (row["schemeSlug"] ?? "").trim().toLowerCase();
@@ -280,5 +281,5 @@ export function validateRow(row: CsvRow, _rowNumber: number): RowValidationResul
 // Limits (exported so controller and tests can reference the same values)
 // ---------------------------------------------------------------------------
 
-export const IMPORT_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+export const IMPORT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB — large enough for the cleaned MP dataset (~5.6 MB)
 export const IMPORT_MAX_ROWS  = 3_000;

@@ -33,7 +33,8 @@ function mapCsvRow(row) {
     deptEn: trunc(row.ministry ?? "", 180),   deptHi: "",
     need: inferNeed(row.tags ?? ""),
     level: rawLevel === "Central Government" ? "Central Government"
-         : rawLevel === "State Government"   ? "State Government" : null,
+         : rawLevel === "State Government"   ? "State Government"
+         : rawLevel === "State / UT Government" ? "State Government" : null,
     myschemeSlug: (row.schemeSlug ?? "").trim().toLowerCase() || null,
     myschemeUrl: sanitiseUrl(row.myschemeUrl ?? ""),
     sourceUrl:   sanitiseUrl(row.officialLink ?? ""),
@@ -51,7 +52,7 @@ function validateRow(row) {
   if (n.length > 180)     return { ok: false, reason: `Scheme Name exceeds 180 characters (got ${n.length}).` };
   return { ok: true, mapped: mapCsvRow(row) };
 }
-const IMPORT_MAX_BYTES = 5 * 1024 * 1024;
+const IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 const IMPORT_MAX_ROWS  = 3_000;
 
 function r(o = {}) {
@@ -81,10 +82,11 @@ test("mapCsvRow: deptEn correct",          () => assert.equal(mapCsvRow(r()).dep
 test("mapCsvRow: deptHi always blank",     () => assert.equal(mapCsvRow(r()).deptHi, ""));
 test("mapCsvRow: shortHi always blank",    () => assert.equal(mapCsvRow(r()).shortHi, ""));
 test("mapCsvRow: benefitHi always blank",  () => assert.equal(mapCsvRow(r()).benefitHi, ""));
-test("mapCsvRow: Central level",           () => assert.equal(mapCsvRow(r({ level:"Central Government" })).level, "Central Government"));
-test("mapCsvRow: State level",             () => assert.equal(mapCsvRow(r({ level:"State Government" })).level, "State Government"));
-test("mapCsvRow: unknown level → null",    () => assert.equal(mapCsvRow(r({ level:"UT" })).level, null));
-test("mapCsvRow: blank level → null",      () => assert.equal(mapCsvRow(r({ level:"" })).level, null));
+test("mapCsvRow: Central level",             () => assert.equal(mapCsvRow(r({ level:"Central Government" })).level, "Central Government"));
+test("mapCsvRow: State level",               () => assert.equal(mapCsvRow(r({ level:"State Government" })).level, "State Government"));
+test("mapCsvRow: State/UT level normalised", () => assert.equal(mapCsvRow(r({ level:"State / UT Government" })).level, "State Government"));
+test("mapCsvRow: unknown level → null",      () => assert.equal(mapCsvRow(r({ level:"UT" })).level, null));
+test("mapCsvRow: blank level → null",        () => assert.equal(mapCsvRow(r({ level:"" })).level, null));
 test("mapCsvRow: slug lowercased",         () => assert.equal(mapCsvRow(r({ schemeSlug:"  Widow-Pension  " })).myschemeSlug, "widow-pension"));
 test("mapCsvRow: blank slug → null",       () => assert.equal(mapCsvRow(r({ schemeSlug:"" })).myschemeSlug, null));
 test("mapCsvRow: valid sourceUrl",         () => assert.equal(mapCsvRow(r()).sourceUrl, "https://example.gov.in/pension"));
@@ -126,6 +128,6 @@ test("sanitiseUrl: accepts https",         () => assert.equal(sanitiseUrl("https
 test("sanitiseUrl: accepts http",          () => assert.equal(sanitiseUrl("http://a.gov.in"), "http://a.gov.in"));
 test("sanitiseUrl: rejects ftp",           () => assert.equal(sanitiseUrl("ftp://a.gov.in"), null));
 test("sanitiseUrl: rejects empty",         () => assert.equal(sanitiseUrl(""), null));
-test("IMPORT_MAX_BYTES is 5 MB",           () => assert.equal(IMPORT_MAX_BYTES, 5*1024*1024));
+test("IMPORT_MAX_BYTES is 10 MB",          () => assert.equal(IMPORT_MAX_BYTES, 10*1024*1024));
 test("IMPORT_MAX_ROWS is 3000",            () => assert.equal(IMPORT_MAX_ROWS, 3_000));
 test("ADMIN role discriminator",           () => { const isAdmin = r => r==="ADMIN"; assert.ok(isAdmin("ADMIN")); assert.ok(!isAdmin("DONOR")); });
