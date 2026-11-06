@@ -2550,8 +2550,8 @@ function ImportSchemesModal({
 
   const handleFileSelect = (file: File) => {
     setFileError(null);
-    if (file.size > 5 * 1024 * 1024) {
-      setFileError(t({ hi: "फ़ाइल 5 MB से बड़ी है। छोटी फ़ाइल का उपयोग करें।", en: "File exceeds 5 MB. Use a smaller file." }));
+    if (file.size > 10 * 1024 * 1024) {
+      setFileError(t({ hi: "फ़ाइल 10 MB से बड़ी है। छोटी फ़ाइल का उपयोग करें।", en: "File exceeds 10 MB. Use a smaller file." }));
       return;
     }
     if (!file.name.toLowerCase().endsWith(".csv")) {
@@ -2648,7 +2648,7 @@ function ImportSchemesModal({
                   {t({ hi: "CSV फ़ाइल यहाँ छोड़ें या क्लिक करके चुनें", en: "Drop CSV file here or click to browse" })}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {t({ hi: "अधिकतम 5 MB, CSV प्रारूप, UTF-8 एन्कोडिंग", en: "Max 5 MB, CSV format, UTF-8 encoding" })}
+                  {t({ hi: "अधिकतम 10 MB, CSV प्रारूप, UTF-8 एन्कोडिंग", en: "Max 10 MB, CSV format, UTF-8 encoding" })}
                 </p>
               </div>
               <input
