@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState, useMemo, type FormEvent } from "react";
+import { useEffect, useState, useMemo, useRef, type FormEvent } from "react";
 import {
   LayoutDashboard,
   BookOpen,
@@ -31,6 +31,8 @@ import {
   Layers,
   Save,
   Check,
+  Upload,
+  FileUp,
 } from "lucide-react";
 import { DISTRICTS, NEEDS, inr, type Need, type Scheme, type Campaign } from "@/lib/data";
 import { useLang, type L } from "@/lib/i18n";
@@ -44,6 +46,7 @@ import {
   getAdminDonorDonations,
   getAdminReceipts,
   downloadReceipt,
+  importSchemesCsv,
   getAdminReportSummary,
   downloadForm10BdCsv,
   getAuditLog,
@@ -63,6 +66,7 @@ import {
   type AdminDonorSummary,
   type AdminDonorDonation,
   type AdminReceipt,
+  type ImportSummary,
   type AdminReportSummary,
   type AuditLogRow,
   type SessionUser,
@@ -2431,6 +2435,449 @@ function CampaignGoalModal({
 }
 
 // -------------------------------------------------------------
+// CSV IMPORT MODAL (Checkpoint 3)
+// -------------------------------------------------------------
+
+type ImportPreviewRow = {
+  rowNumber: number;
+  schemeName: string;
+  need: string;
+  level: string;
+  sourceUrl: string;
+  valid: boolean;
+  reason?: string;
+};
+
+function parseCsvPreview(csvText: string): { rows: ImportPreviewRow[]; totalDataRows: number } {
+  const lines = csvText.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return { rows: [], totalDataRows: 0 };
+
+  // Simple CSV split (handles quoted fields with commas)
+  function splitLine(line: string): string[] {
+    const fields: string[] = [];
+    let i = 0;
+    while (i <= line.length) {
+      if (line[i] === '"') {
+        i++;
+        let val = "";
+        while (i < line.length) {
+          if (line[i] === '"') {
+            if (line[i + 1] === '"') { val += '"'; i += 2; } else { i++; break; }
+          } else { val += line[i++]; }
+        }
+        fields.push(val);
+        if (line[i] === ",") i++;
+      } else {
+        const start = i;
+        while (i < line.length && line[i] !== ",") i++;
+        fields.push(line.slice(start, i));
+        if (i < line.length) i++;
+      }
+    }
+    return fields;
+  }
+
+  // Map headers
+  const rawHeaders = splitLine(lines[0] ?? "");
+  const norm = (h: string) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
+  const headerMap: Record<string, string> = {
+    scheme_name: "schemeName", scheme_slug: "schemeSlug", level: "level",
+    state___ut___ministry: "ministry", state_ut_ministry: "ministry",
+    state___ut__ministry: "ministry", tags___categories: "tags", tags__categories: "tags",
+    description: "description", eligibility_criteria: "eligibilityCriteria",
+    eligibility__general_: "eligibilityGeneral", eligibility__general: "eligibilityGeneral",
+    exclusions___ineligibility: "exclusions", exclusions__ineligibility: "exclusions",
+    benefits: "benefits", application_process: "applicationProcess",
+    documents_required: "documentsRequired", official_link: "officialLink",
+    myscheme_url: "myschemeUrl",
+  };
+  const headers = rawHeaders.map((h) => headerMap[norm(h)] ?? norm(h));
+
+  // Need inference (inline, mirrors backend)
+  function inferNeed(tags: string): string {
+    const t = tags.toLowerCase();
+    if (["education","scholarship","student","school","college","girl child","beti"].some((k) => t.includes(k))) return "education";
+    if (["health","medical","hospital","maternity","nutrition","ayushman"].some((k) => t.includes(k))) return "health";
+    if (["employment","livelihood","skill","shg","entrepreneur","msme","labour","training","weaver"].some((k) => t.includes(k))) return "work";
+    if (["housing","house","gas","lpg","electricity","water","toilet","ration","awas"].some((k) => t.includes(k))) return "housing";
+    if (["pension","financial","cash","dbt","assistance","welfare","insurance","subsidy","allowance"].some((k) => t.includes(k))) return "money";
+    return "money";
+  }
+
+  const result: ImportPreviewRow[] = [];
+  for (let li = 1; li < lines.length && li <= 50; li++) {
+    const values = splitLine(lines[li] ?? "");
+    const row: Record<string, string> = {};
+    for (let hi = 0; hi < headers.length; hi++) row[headers[hi] ?? `col_${hi}`] = values[hi]?.trim() ?? "";
+
+    const name = (row["schemeName"] ?? "").trim();
+    const valid = name.length >= 2 && name.length <= 180;
+    const level = (row["level"] ?? "").trim();
+
+    result.push({
+      rowNumber: li + 1, // 1-indexed, +1 for header
+      schemeName: name || "(empty)",
+      need: inferNeed(row["tags"] ?? ""),
+      level: level === "Central Government" ? "Central" : level === "State Government" ? "State" : level || "—",
+      sourceUrl: (row["officialLink"] ?? "").trim() || "—",
+      valid,
+      ...(!valid ? { reason: "Name missing or too short/long" } : {}),
+    });
+  }
+
+  return { rows: result, totalDataRows: lines.length - 1 };
+}
+
+function ImportSchemesModal({
+  onClose,
+  onImportComplete,
+}: {
+  onClose: () => void;
+  onImportComplete: (summary: ImportSummary) => Promise<void>;
+}) {
+  const { t } = useLang();
+
+  const [stage, setStage] = useState<"select" | "preview" | "importing" | "done">("select");
+  const [fileName, setFileName] = useState<string>("");
+  const [fileSize, setFileSize] = useState<number>(0);
+  const [csvText, setCsvText] = useState<string>("");
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [previewRows, setPreviewRows] = useState<ImportPreviewRow[]>([]);
+  const [totalDataRows, setTotalDataRows] = useState(0);
+  const [importResult, setImportResult] = useState<ImportSummary | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = (file: File) => {
+    setFileError(null);
+    if (file.size > 5 * 1024 * 1024) {
+      setFileError(t({ hi: "फ़ाइल 5 MB से बड़ी है। छोटी फ़ाइल का उपयोग करें।", en: "File exceeds 5 MB. Use a smaller file." }));
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setFileError(t({ hi: "केवल CSV फ़ाइलें समर्थित हैं।", en: "Only CSV files are supported." }));
+      return;
+    }
+    setFileName(file.name);
+    setFileSize(file.size);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result ?? "");
+      setCsvText(text);
+      const { rows, totalDataRows } = parseCsvPreview(text);
+      setPreviewRows(rows);
+      setTotalDataRows(totalDataRows);
+      setStage("preview");
+    };
+    reader.onerror = () => setFileError(t({ hi: "फ़ाइल पढ़ी नहीं जा सकी।", en: "Could not read the file." }));
+    reader.readAsText(file);
+  };
+
+  const handleImport = async () => {
+    setStage("importing");
+    setImportError(null);
+    try {
+      const summary = await importSchemesCsv(csvText);
+      setImportResult(summary);
+      setStage("done");
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "Import failed.");
+      setStage("preview"); // go back to preview so they can retry
+    }
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+
+  const validCount = previewRows.filter((r) => r.valid).length;
+  const invalidCount = previewRows.filter((r) => !r.valid).length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 md:p-6 overflow-y-auto">
+      <div className="card-soft max-w-3xl w-full max-h-[92vh] flex flex-col bg-card shadow-2xl animate-in fade-in zoom-in-95">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b shrink-0">
+          <div>
+            <h2 className="font-display text-2xl text-foreground flex items-center gap-2">
+              <FileUp className="size-5" />
+              {t({ hi: "CSV से योजनाएँ आयात करें", en: "Import Schemes from CSV" })}
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t({ hi: "myScheme पोर्टल डेटासेट (Apache-2.0) से योजनाएँ आयात करें।", en: "Import schemes from the myScheme portal dataset (Apache-2.0)." })}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-muted text-muted-foreground">
+            <X className="size-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-5 md:p-6 overflow-y-auto flex-1 space-y-5 text-sm">
+
+          {/* Draft disclaimer — always visible */}
+          <div className="rounded-xl bg-turmeric/10 border border-turmeric/30 px-4 py-3 text-xs flex items-start gap-2">
+            <AlertCircle className="size-4 shrink-0 mt-0.5 text-turmeric" />
+            <span>
+              {t({
+                hi: "आयात की गई सभी योजनाएँ अप्रकाशित ड्राफ्ट के रूप में सहेजी जाएँगी। ये सार्वजनिक उपयोगकर्ताओं को तब तक दिखाई नहीं देंगी जब तक कोई प्रशासक समीक्षा करके प्रकाशित नहीं करता।",
+                en: "All imported schemes are saved as unpublished drafts. They will not be visible to public users until an administrator reviews and publishes them.",
+              })}
+            </span>
+          </div>
+
+          {/* Stage: Select file */}
+          {stage === "select" && (
+            <div className="space-y-4">
+              <div
+                className="border-2 border-dashed border-muted-foreground/30 rounded-2xl p-10 text-center cursor-pointer hover:border-primary hover:bg-primary/5 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-primary", "bg-primary/5"); }}
+                onDragLeave={(e) => { e.currentTarget.classList.remove("border-primary", "bg-primary/5"); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.classList.remove("border-primary", "bg-primary/5");
+                  const file = e.dataTransfer.files[0];
+                  if (file) handleFileSelect(file);
+                }}
+              >
+                <Upload className="size-12 mx-auto text-muted-foreground/40" />
+                <p className="mt-4 font-semibold">
+                  {t({ hi: "CSV फ़ाइल यहाँ छोड़ें या क्लिक करके चुनें", en: "Drop CSV file here or click to browse" })}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {t({ hi: "अधिकतम 5 MB, CSV प्रारूप, UTF-8 एन्कोडिंग", en: "Max 5 MB, CSV format, UTF-8 encoding" })}
+                </p>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleFileSelect(file);
+                }}
+              />
+              {fileError && (
+                <div role="alert" className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive flex items-center gap-2">
+                  <AlertCircle className="size-4 shrink-0" />
+                  <span>{fileError}</span>
+                </div>
+              )}
+
+              {/* Expected CSV format help */}
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer font-semibold hover:text-foreground">
+                  {t({ hi: "अपेक्षित CSV स्तंभ", en: "Expected CSV columns" })}
+                </summary>
+                <div className="mt-2 p-3 rounded-lg bg-muted/50 space-y-0.5 font-mono text-[11px]">
+                  <p>Scheme Name, Scheme Slug, Level, State / UT / Ministry,</p>
+                  <p>Application Mode, Tags / Categories, Description,</p>
+                  <p>Eligibility Criteria, Eligibility (General), Exclusions,</p>
+                  <p>Benefits, Application Process, Documents Required,</p>
+                  <p>Frequently Asked Questions, Official Link, MyScheme URL</p>
+                </div>
+                <p className="mt-2">
+                  {t({ hi: "स्रोत: Aryan-Pardeshi/gov-myscheme-dataset (Apache-2.0)", en: "Source: Aryan-Pardeshi/gov-myscheme-dataset (Apache-2.0)" })}
+                </p>
+              </details>
+            </div>
+          )}
+
+          {/* Stage: Preview */}
+          {stage === "preview" && (
+            <div className="space-y-4">
+              {/* File info */}
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-muted/50 px-4 py-3 text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <FileUp className="size-4 shrink-0 text-primary" />
+                  <span className="font-semibold truncate">{fileName}</span>
+                  <span className="text-muted-foreground shrink-0">{formatSize(fileSize)}</span>
+                </div>
+                <button
+                  onClick={() => { setStage("select"); setFileName(""); setCsvText(""); setPreviewRows([]); }}
+                  className="text-primary hover:underline font-semibold shrink-0"
+                >
+                  {t({ hi: "बदलें", en: "Change" })}
+                </button>
+              </div>
+
+              {/* Summary stats */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-xl bg-muted/50 p-3 text-center">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">{t({ hi: "कुल पंक्तियाँ", en: "Total Rows" })}</p>
+                  <p className="font-display text-2xl mt-1">{totalDataRows}</p>
+                </div>
+                <div className="rounded-xl bg-leaf-soft/50 p-3 text-center">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">{t({ hi: "मान्य (प्रदर्शन)", en: "Valid (shown)" })}</p>
+                  <p className="font-display text-2xl mt-1 text-leaf">{validCount}</p>
+                </div>
+                <div className="rounded-xl bg-destructive/5 p-3 text-center">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">{t({ hi: "अमान्य (प्रदर्शन)", en: "Invalid (shown)" })}</p>
+                  <p className="font-display text-2xl mt-1 text-destructive">{invalidCount}</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                {t({
+                  hi: `प्रदर्शन में पहली 50 पंक्तियाँ दिखाई गई हैं (कुल ${totalDataRows})। वास्तविक आयात सभी पंक्तियों पर लागू होगा।`,
+                  en: `Showing first 50 rows (of ${totalDataRows} total). The actual import will process all rows.`,
+                })}
+              </p>
+
+              {/* Preview table */}
+              <div className="card-soft overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-muted/70 text-[11px] text-muted-foreground uppercase font-semibold">
+                      <tr>
+                        <th className="p-3">#</th>
+                        <th className="p-3">{t({ hi: "योजना नाम", en: "Scheme Name" })}</th>
+                        <th className="p-3">{t({ hi: "श्रेणी", en: "Category" })}</th>
+                        <th className="p-3">{t({ hi: "स्तर", en: "Level" })}</th>
+                        <th className="p-3">{t({ hi: "स्रोत URL", en: "Source URL" })}</th>
+                        <th className="p-3">{t({ hi: "स्थिति", en: "Status" })}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {previewRows.map((r) => (
+                        <tr key={r.rowNumber} className={r.valid ? "" : "bg-destructive/5"}>
+                          <td className="p-3 font-mono text-muted-foreground">{r.rowNumber}</td>
+                          <td className="p-3 font-medium truncate max-w-[200px]">{r.schemeName}</td>
+                          <td className="p-3 capitalize">{r.need}</td>
+                          <td className="p-3">{r.level}</td>
+                          <td className="p-3 text-muted-foreground truncate max-w-[150px]">{r.sourceUrl}</td>
+                          <td className="p-3">
+                            {r.valid
+                              ? <span className="text-leaf font-semibold">✓</span>
+                              : <span className="text-destructive font-semibold" title={r.reason}>✗</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {importError && (
+                <div role="alert" className="rounded-xl bg-destructive/10 p-3 text-sm text-destructive flex items-center gap-2">
+                  <AlertCircle className="size-4 shrink-0" />
+                  <span>{importError}</span>
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div className="flex justify-between items-center gap-3 pt-2 border-t">
+                <p className="text-xs text-muted-foreground">
+                  {t({
+                    hi: "आयात पर सभी योजनाएँ अप्रकाशित ड्राफ्ट के रूप में सहेजी जाएँगी।",
+                    en: "On import, all schemes will be saved as unpublished drafts.",
+                  })}
+                </p>
+                <div className="flex gap-3">
+                  <button onClick={onClose} className="btn-big !min-h-10 border bg-card">
+                    {t({ hi: "रद्द करें", en: "Cancel" })}
+                  </button>
+                  <button
+                    onClick={() => void handleImport()}
+                    disabled={validCount === 0}
+                    className="btn-big !min-h-10 bg-primary text-primary-foreground disabled:opacity-50"
+                  >
+                    <Upload className="size-4" />
+                    <span>{t({ hi: `${totalDataRows} पंक्तियाँ आयात करें`, en: `Import ${totalDataRows} rows` })}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Stage: Importing */}
+          {stage === "importing" && (
+            <div className="py-16 text-center space-y-4">
+              <div className="inline-block size-10 animate-spin rounded-full border-3 border-primary border-t-transparent" />
+              <p className="font-semibold text-sm">
+                {t({ hi: "CSV प्रसंस्करण हो रही है…", en: "Processing CSV…" })}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {t({ hi: "डुप्लिकेट जाँच और डेटाबेस लेखन। इसमें कुछ क्षण लग सकते हैं।", en: "Checking duplicates and writing to database. This may take a moment." })}
+              </p>
+            </div>
+          )}
+
+          {/* Stage: Done */}
+          {stage === "done" && importResult && (
+            <div className="space-y-5">
+              {/* Summary */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-xl bg-leaf-soft/50 p-4 text-center">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">{t({ hi: "आयातित", en: "Imported" })}</p>
+                  <p className="font-display text-3xl mt-1 text-leaf">{importResult.imported}</p>
+                </div>
+                <div className="rounded-xl bg-muted/50 p-4 text-center">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">{t({ hi: "डुप्लिकेट", en: "Duplicates" })}</p>
+                  <p className="font-display text-3xl mt-1">{importResult.skippedDuplicates}</p>
+                </div>
+                <div className="rounded-xl bg-destructive/5 p-4 text-center">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">{t({ hi: "अमान्य", en: "Invalid" })}</p>
+                  <p className="font-display text-3xl mt-1 text-destructive">{importResult.skippedInvalid}</p>
+                </div>
+                <div className="rounded-xl bg-muted/50 p-4 text-center">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase">{t({ hi: "कुल", en: "Total" })}</p>
+                  <p className="font-display text-3xl mt-1">{importResult.totalRows}</p>
+                </div>
+              </div>
+
+              {/* Errors list */}
+              {importResult.errors.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold text-destructive">
+                    {t({ hi: `त्रुटियाँ (${importResult.errors.length})`, en: `Errors (${importResult.errors.length})` })}
+                  </h4>
+                  <div className="max-h-48 overflow-y-auto space-y-1">
+                    {importResult.errors.map((err, i) => (
+                      <div key={i} className="flex items-start gap-2 rounded-lg bg-destructive/5 px-3 py-2 text-xs">
+                        <span className="font-mono text-destructive shrink-0">#{err.row}</span>
+                        <span className="text-muted-foreground">{err.reason}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Success message */}
+              {importResult.imported > 0 && (
+                <div className="rounded-xl bg-leaf-soft/30 p-4 text-sm text-leaf flex items-center gap-2">
+                  <CheckCircle2 className="size-5 shrink-0" />
+                  <span>
+                    {t({
+                      hi: `${importResult.imported} योजनाएँ अप्रकाशित ड्राफ्ट के रूप में सहेजी गईं। योजना सूची में इनकी समीक्षा करें और प्रकाशित करें।`,
+                      en: `${importResult.imported} schemes saved as unpublished drafts. Review them in the scheme list and publish when ready.`,
+                    })}
+                  </span>
+                </div>
+              )}
+
+              {/* Close button */}
+              <div className="flex justify-end pt-2 border-t">
+                <button
+                  onClick={() => void onImportComplete(importResult)}
+                  className="btn-big !min-h-10 bg-primary text-primary-foreground"
+                >
+                  {t({ hi: "समाप्त करें", en: "Done" })}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
 // SCHEMES SECTION (CHECKPOINT 2)
 // -------------------------------------------------------------
 
@@ -2463,6 +2910,7 @@ function SchemesSection({
   const [deleteDialogScheme, setDeleteDialogScheme] = useState<Scheme | null>(null);
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [importModalOpen, setImportModalOpen] = useState(false);
 
   // Statistics calculation
   const totalCount = schemes.length;
@@ -2590,16 +3038,26 @@ function SchemesSection({
           </div>
 
           {/* Prominent Add New Scheme Button */}
-          <button
-            onClick={() => {
-              setEditingScheme(null);
-              setModalOpen(true);
-            }}
-            className="btn-big bg-primary text-primary-foreground flex items-center justify-center gap-2 whitespace-nowrap shadow-sm hover:opacity-95"
-          >
-            <Plus className="size-5" />
-            <span>{t({ hi: "+ नई योजना जोड़ें", en: "+ Add New Scheme" })}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setEditingScheme(null);
+                setModalOpen(true);
+              }}
+              className="btn-big bg-primary text-primary-foreground flex items-center justify-center gap-2 whitespace-nowrap shadow-sm hover:opacity-95"
+            >
+              <Plus className="size-5" />
+              <span>{t({ hi: "+ नई योजना जोड़ें", en: "+ Add New Scheme" })}</span>
+            </button>
+            <button
+              onClick={() => setImportModalOpen(true)}
+              className="btn-big border bg-card flex items-center justify-center gap-2 whitespace-nowrap hover:bg-muted"
+              title={t({ hi: "CSV फ़ाइल से योजनाएँ आयात करें", en: "Import schemes from CSV file" })}
+            >
+              <Upload className="size-4" />
+              <span className="hidden sm:inline">{t({ hi: "CSV आयात", en: "Import CSV" })}</span>
+            </button>
+          </div>
         </div>
 
         {/* Filter Dropdowns */}
@@ -2906,6 +3364,24 @@ function SchemesSection({
             </div>
           </div>
         </div>
+      )}
+
+      {/* CSV Import Modal */}
+      {importModalOpen && (
+        <ImportSchemesModal
+          onClose={() => setImportModalOpen(false)}
+          onImportComplete={async (summary) => {
+            setImportModalOpen(false);
+            await onReload();
+            void onSyncOverview();
+            setFeedback(
+              t({
+                hi: `${summary.imported} योजनाएँ ड्राफ्ट के रूप में आयात की गईं (${summary.skippedDuplicates} डुप्लिकेट, ${summary.skippedInvalid} अमान्य)।`,
+                en: `${summary.imported} schemes imported as drafts (${summary.skippedDuplicates} duplicates, ${summary.skippedInvalid} invalid).`,
+              })
+            );
+          }}
+        />
       )}
     </div>
   );

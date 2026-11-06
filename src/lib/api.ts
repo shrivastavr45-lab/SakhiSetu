@@ -182,6 +182,38 @@ export type AdminReceipt = {
 };
 
 export const getAdminReceipts = () => request<AdminReceipt[]>("/admin/receipts");
+
+export type ImportSummary = {
+  totalRows: number;
+  imported: number;
+  skippedDuplicates: number;
+  skippedInvalid: number;
+  errors: Array<{ row: number; reason: string }>;
+};
+
+/**
+ * Sends raw CSV text to POST /admin/import/schemes/csv.
+ * Uses fetch directly (not the request() helper) because the body is
+ * text/csv, not JSON. The admin session cookie is sent via credentials: "include".
+ */
+export async function importSchemesCsv(csvText: string): Promise<ImportSummary> {
+  const response = await fetch(`${API_BASE}/admin/import/schemes/csv`, {
+    method: "POST",
+    headers: { "Content-Type": "text/csv" },
+    credentials: "include",
+    body: csvText,
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const payload = contentType.includes("application/json") ? await response.json() as unknown : null;
+  if (!response.ok) {
+    const error = payload && typeof payload === "object" && "error" in payload
+      ? (payload as { error?: { code?: string; message?: string } }).error
+      : undefined;
+    throw new ApiError(response.status, error?.code ?? "IMPORT_FAILED", error?.message ?? `Import failed (${response.status}).`);
+  }
+  if (payload && typeof payload === "object" && "data" in payload) return (payload as { data: ImportSummary }).data;
+  throw new ApiError(500, "IMPORT_PARSE_ERROR", "The server returned an unexpected response format.");
+}
 export const createAdminScheme = (body: Record<string, unknown> & { need: string; name: L }) => request<Scheme>("/admin/schemes", { method: "POST", body });
 export const updateAdminScheme = (id: string, body: Record<string, unknown>) => request<Scheme>(`/admin/schemes/${encodeURIComponent(id)}`, { method: "PATCH", body });
 export const deleteAdminScheme = (id: string) => request<{ deleted: boolean }>(`/admin/schemes/${encodeURIComponent(id)}`, { method: "DELETE" });
