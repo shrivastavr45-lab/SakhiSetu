@@ -16,6 +16,7 @@ import { schemeRouter, adminSchemeRouter } from "./routes/scheme.routes.js";
 import { settingsRouter, adminSettingsRouter } from "./routes/settings.routes.js";
 import { adminReceiptRouter } from "./routes/receipt.routes.js";
 import { adminReportRouter } from "./routes/report.routes.js";
+import { adminImportRouter } from "./routes/import.routes.js";
 import { adminOverviewRouter } from "./routes/overview.routes.js";
 
 export const app = express();
@@ -34,6 +35,7 @@ app.use(cors({
     "X-Receipt-Token",
     "Authorization",
     "X-Test-Payment-Outcome",
+    "X-Import-Dry-Run",
   ],
 }));
 app.use(express.json({ limit: "50kb", strict: true }));
@@ -79,6 +81,7 @@ app.use("/api/admin/donations", adminDonationRouter);
 app.use("/api/admin/donors", adminDonorRouter);
 app.use("/api/admin/receipts", adminReceiptRouter);
 app.use("/api/admin/reports", adminReportRouter);
+app.use("/api/admin/import", adminImportRouter);
 app.use("/api/admin/ai", adminAiRouter);
 app.use("/api/admin/overview", adminOverviewRouter);
 app.use("/api/admin/settings", adminSettingsRouter);
