@@ -2449,36 +2449,41 @@ type ImportPreviewRow = {
 };
 
 function parseCsvPreview(csvText: string): { rows: ImportPreviewRow[]; totalDataRows: number } {
-  const lines = csvText.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length < 2) return { rows: [], totalDataRows: 0 };
+  // Strip BOM if present
+  const text = csvText.startsWith("\uFEFF") ? csvText.slice(1) : csvText;
 
-  // Simple CSV split (handles quoted fields with commas)
-  function splitLine(line: string): string[] {
-    const fields: string[] = [];
-    let i = 0;
-    while (i <= line.length) {
-      if (line[i] === '"') {
-        i++;
-        let val = "";
-        while (i < line.length) {
-          if (line[i] === '"') {
-            if (line[i + 1] === '"') { val += '"'; i += 2; } else { i++; break; }
-          } else { val += line[i++]; }
-        }
-        fields.push(val);
-        if (line[i] === ",") i++;
+  // RFC-4180 state-machine parser — correctly handles embedded newlines in quoted fields.
+  // The original implementation used .split(/\r?\n/) which broke multi-line fields.
+  function parseAllRows(src: string): string[][] {
+    const rows: string[][] = [];
+    let field = "";
+    let row: string[] = [];
+    let inQuotes = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (src[i + 1] === '"') { field += '"'; i++; }
+          else { inQuotes = false; }
+        } else { field += ch; }
       } else {
-        const start = i;
-        while (i < line.length && line[i] !== ",") i++;
-        fields.push(line.slice(start, i));
-        if (i < line.length) i++;
+        if (ch === '"')  { inQuotes = true; }
+        else if (ch === ',') { row.push(field); field = ""; }
+        else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ""; }
+        else if (ch !== '\r') { field += ch; }
       }
     }
-    return fields;
+    if (field || row.length > 0) { row.push(field); rows.push(row); }
+    return rows;
   }
 
+  const allRows = parseAllRows(text);
+  const headerRow = allRows[0] ?? [];
+  const dataRows = allRows.slice(1).filter((r) => r.some((v) => v.trim()));
+
+  if (headerRow.length === 0) return { rows: [], totalDataRows: 0 };
+
   // Map headers
-  const rawHeaders = splitLine(lines[0] ?? "");
   const norm = (h: string) => h.trim().toLowerCase().replace(/[^a-z0-9]/g, "_");
   const headerMap: Record<string, string> = {
     scheme_name: "schemeName", scheme_slug: "schemeSlug", level: "level",
@@ -2491,7 +2496,14 @@ function parseCsvPreview(csvText: string): { rows: ImportPreviewRow[]; totalData
     documents_required: "documentsRequired", official_link: "officialLink",
     myscheme_url: "myschemeUrl",
   };
-  const headers = rawHeaders.map((h) => headerMap[norm(h)] ?? norm(h));
+  const headers = headerRow.map((h) => headerMap[norm(h)] ?? norm(h));
+
+  // Validate we found the expected header column
+  if (!headers.includes("schemeName")) {
+    throw new Error(
+      `Unrecognised CSV format — "Scheme Name" column not found. First columns: ${headerRow.slice(0, 4).join(", ")}`
+    );
+  }
 
   // Need inference (inline, mirrors backend)
   function inferNeed(tags: string): string {
@@ -2505,8 +2517,9 @@ function parseCsvPreview(csvText: string): { rows: ImportPreviewRow[]; totalData
   }
 
   const result: ImportPreviewRow[] = [];
-  for (let li = 1; li < lines.length && li <= 50; li++) {
-    const values = splitLine(lines[li] ?? "");
+  const previewLimit = Math.min(dataRows.length, 50);
+  for (let li = 0; li < previewLimit; li++) {
+    const values = dataRows[li] ?? [];
     const row: Record<string, string> = {};
     for (let hi = 0; hi < headers.length; hi++) row[headers[hi] ?? `col_${hi}`] = values[hi]?.trim() ?? "";
 
@@ -2515,17 +2528,20 @@ function parseCsvPreview(csvText: string): { rows: ImportPreviewRow[]; totalData
     const level = (row["level"] ?? "").trim();
 
     result.push({
-      rowNumber: li + 1, // 1-indexed, +1 for header
+      rowNumber: li + 2, // 1-indexed: +1 for header, +1 for 1-based
       schemeName: name || "(empty)",
       need: inferNeed(row["tags"] ?? ""),
-      level: level === "Central Government" ? "Central" : level === "State Government" ? "State" : level || "—",
+      level: level === "Central Government"     ? "Central"
+           : level === "State Government"       ? "State"
+           : level === "State / UT Government"  ? "State"
+           : level || "—",
       sourceUrl: (row["officialLink"] ?? "").trim() || "—",
       valid,
       ...(!valid ? { reason: "Name missing or too short/long" } : {}),
     });
   }
 
-  return { rows: result, totalDataRows: lines.length - 1 };
+  return { rows: result, totalDataRows: dataRows.length };
 }
 
 function ImportSchemesModal({
@@ -2537,7 +2553,7 @@ function ImportSchemesModal({
 }) {
   const { t } = useLang();
 
-  const [stage, setStage] = useState<"select" | "preview" | "importing" | "done">("select");
+  const [stage, setStage] = useState<"select" | "parsing" | "preview" | "importing" | "done">("select");
   const [fileName, setFileName] = useState<string>("");
   const [fileSize, setFileSize] = useState<number>(0);
   const [csvText, setCsvText] = useState<string>("");
@@ -2560,14 +2576,24 @@ function ImportSchemesModal({
     }
     setFileName(file.name);
     setFileSize(file.size);
+    setStage("parsing");
     const reader = new FileReader();
     reader.onload = () => {
       const text = String(reader.result ?? "");
       setCsvText(text);
-      const { rows, totalDataRows } = parseCsvPreview(text);
-      setPreviewRows(rows);
-      setTotalDataRows(totalDataRows);
-      setStage("preview");
+      try {
+        const { rows, totalDataRows } = parseCsvPreview(text);
+        setPreviewRows(rows);
+        setTotalDataRows(totalDataRows);
+        setStage("preview");
+      } catch (err) {
+        setStage("select");
+        setFileError(
+          err instanceof Error
+            ? err.message
+            : t({ hi: "CSV प्रीव्यू बनाने में त्रुटि।", en: "Could not generate CSV preview." })
+        );
+      }
     };
     reader.onerror = () => setFileError(t({ hi: "फ़ाइल पढ़ी नहीं जा सकी।", en: "Could not read the file." }));
     reader.readAsText(file);
@@ -2627,6 +2653,17 @@ function ImportSchemesModal({
               })}
             </span>
           </div>
+
+          {/* Stage: Parsing (reading and parsing large file) */}
+          {stage === "parsing" && (
+            <div className="py-12 text-center space-y-3">
+              <div className="inline-block size-8 animate-spin rounded-full border-3 border-primary border-t-transparent" />
+              <p className="font-semibold text-sm">
+                {t({ hi: "फ़ाइल पढ़ी जा रही है…", en: "Reading file…" })}
+              </p>
+              <p className="text-xs text-muted-foreground">{fileName}</p>
+            </div>
+          )}
 
           {/* Stage: Select file */}
           {stage === "select" && (
@@ -2698,7 +2735,7 @@ function ImportSchemesModal({
                   <span className="text-muted-foreground shrink-0">{formatSize(fileSize)}</span>
                 </div>
                 <button
-                  onClick={() => { setStage("select"); setFileName(""); setCsvText(""); setPreviewRows([]); }}
+                  onClick={() => { setStage("select"); setFileName(""); setCsvText(""); setPreviewRows([]); setFileError(null); }}
                   className="text-primary hover:underline font-semibold shrink-0"
                 >
                   {t({ hi: "बदलें", en: "Change" })}
