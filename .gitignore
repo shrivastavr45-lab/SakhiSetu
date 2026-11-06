@@ -17,6 +17,9 @@ backend/dist/
 .wrangler/
 .nitro/
 
+# Data files (scheme dataset CSV is too large for git — 15MB)
+data/scheme-dataset/gov_myscheme_data.csv
+
 # Logs
 *.log
 
