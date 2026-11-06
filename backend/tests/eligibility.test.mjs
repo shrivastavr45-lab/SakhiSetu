@@ -82,3 +82,46 @@ test("an age band crossing a rule boundary is retained as a possible match with 
   assert.ok(result.unansweredRules.includes("maxAge"));
   assert.ok(result.rulesApplied.includes("minAge"));
 });
+
+// ---------------------------------------------------------------------------
+// hasStructuredRules tests
+// ---------------------------------------------------------------------------
+
+test("hasStructuredRules is false when rules object is empty (no minAge, maxAge, booleans, or district restriction)", () => {
+  const emptyRulesScheme = { id: "SCH-999", need: "money", districts: "all", rules: {} };
+  const result = evaluateEligibility({ age: 30, bpl: true }, emptyRulesScheme);
+  assert.equal(result.hasStructuredRules, false);
+  // Still a possible match — an empty-rules scheme is never excluded
+  assert.equal(result.matched, true);
+});
+
+test("hasStructuredRules is true when rules contain a boolean field (widowed)", () => {
+  const result = evaluateEligibility({ widowed: true }, shgScheme);
+  // shgScheme has shgMember:true — that's a boolean rule
+  assert.equal(result.hasStructuredRules, true);
+});
+
+test("hasStructuredRules is true when rules contain minAge", () => {
+  const result = evaluateEligibility({ age: 30, bpl: true, widowed: true }, widowScheme);
+  assert.equal(result.hasStructuredRules, true);
+});
+
+test("hasStructuredRules is true when scheme has a district restriction even with empty boolean rules", () => {
+  const districtOnlyScheme = { id: "SCH-998", need: "health", districts: ["bhopal", "sehore"], rules: {} };
+  const result = evaluateEligibility({ district: "bhopal" }, districtOnlyScheme);
+  assert.equal(result.hasStructuredRules, true);
+});
+
+test("hasStructuredRules is false for an empty-rules scheme regardless of profile completeness", () => {
+  const emptyRulesScheme = { id: "SCH-997", need: "work", districts: "all", rules: {} };
+  // Complete profile — but no rules to apply
+  const result = evaluateEligibility(
+    { age: 35, bpl: true, widowed: true, shgMember: true, pregnant: false, firstChild: false, district: "betul" },
+    emptyRulesScheme,
+  );
+  assert.equal(result.hasStructuredRules, false);
+  assert.equal(result.matched, true);
+  // needPreference may appear if need matches, but rulesApplied otherwise empty
+  const structuredRulesKeys = result.rulesApplied.filter((k) => k !== "needPreference" && k !== "districtAvailability");
+  assert.deepEqual(structuredRulesKeys, []);
+});

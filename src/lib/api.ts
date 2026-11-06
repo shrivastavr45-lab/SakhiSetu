@@ -75,7 +75,7 @@ export async function getSchemes(filters: { q?: string; need?: string; district?
 
 export const getScheme = (id: string) => request<Scheme>(`/schemes/${encodeURIComponent(id)}`);
 export const getCampaigns = (includeInactive = false) => request<Campaign[]>(includeInactive ? "/admin/campaigns" : "/campaigns");
-export const checkEligibility = (profile: Profile) => request<{ results: (Scheme & { match?: { rulesApplied: string[]; unansweredRules: string[] } })[]; count: number; basis: string }>("/eligibility", { method: "POST", body: profile });
+export const checkEligibility = (profile: Profile) => request<{ results: (Scheme & { match?: { rulesApplied: string[]; unansweredRules: string[]; hasStructuredRules?: boolean } })[]; count: number; basis: string }>("/eligibility", { method: "POST", body: profile });
 
 export const registerDonor = (body: { name: string; email: string; password: string }) => request<{ user: SessionUser }>("/auth/register", { method: "POST", body });
 export const login = (body: { email: string; password: string }) => request<{ user: SessionUser }>("/auth/login", { method: "POST", body });

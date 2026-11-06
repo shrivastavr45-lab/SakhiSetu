@@ -36,6 +36,8 @@ export type EligibilityMatch = {
   matched: boolean;
   rulesApplied: EligibilityRuleKey[];
   unansweredRules: EligibilityRuleKey[];
+  /** True when the scheme has at least one structured eligibility rule (age, boolean, or district restriction). */
+  hasStructuredRules: boolean;
   disclaimer: string;
 };
 
@@ -89,11 +91,21 @@ export function evaluateEligibility(
 
   if (profile.need && profile.need === scheme.need) rulesApplied.push("needPreference");
 
+  // hasStructuredRules: true when the scheme encodes at least one verifiable rule.
+  // Schemes imported with rules:{} can still appear as possible matches but the UI
+  // must flag them so users know no structured check was performed.
+  const hasStructuredRules =
+    rules.minAge !== undefined ||
+    rules.maxAge !== undefined ||
+    booleanFields.some((f) => typeof rules[f] === "boolean") ||
+    scheme.districts !== "all";
+
   return {
     schemeId: scheme.id,
     matched,
     rulesApplied,
     unansweredRules,
+    hasStructuredRules,
     disclaimer: "Possible match only. The relevant government department makes the final eligibility decision.",
   };
 }

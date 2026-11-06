@@ -180,15 +180,50 @@ function Finder() {
         <div>
           <p className="text-primary font-semibold">{t({ hi: "बहुत बढ़िया! 🎉", en: "Well done! 🎉" })}</p>
           <h1 className="text-3xl md:text-4xl mt-1">
-            {results.length} {t({ hi: "योजनाएँ आपके काम की हो सकती हैं", en: "schemes may be relevant for you" })}
+            {results.length > 0
+              ? `${results.length} ${t({ hi: "योजनाएँ आपके काम की हो सकती हैं", en: "schemes may be relevant for you" })}`
+              : t({ hi: "कोई संभावित योजना नहीं मिली", en: "No possible matches found" })}
           </h1>
           <p className="text-muted-foreground mt-2">{t({ hi: "यह नियमों पर आधारित संभावित मिलान है। अंतिम पात्रता सरकारी विभाग तय करेगा।", en: "These are possible matches based on published rules. The government department decides final eligibility." })}</p>
           {loadingResults && <p role="status" className="mt-5 text-muted-foreground">{t({ hi: "आपके जवाब जाँचे जा रहे हैं…", en: "Checking your answers…" })}</p>}
           {resultError && <p role="alert" className="mt-5 rounded-xl bg-destructive/10 text-destructive p-4">{resultError}</p>}
-          {!loadingResults && !resultError && <div className="mt-6 grid gap-5 sm:grid-cols-2">
-            {results.map((s) => <div key={s.id}><SchemeCard s={s} />{s.match?.rulesApplied.length ? <p className="mt-2 text-xs text-muted-foreground">{t({ hi: "मिलाए गए नियम: ", en: "Rules matched: " })}{describeRules(s.match.rulesApplied, t)}</p> : null}{s.match?.unansweredRules.length ? <p className="mt-1 text-xs text-muted-foreground">{t({ hi: "इन बातों की पुष्टि बाकी है: ", en: "Still to confirm: " })}{describeRules(s.match.unansweredRules, t)}</p> : null}</div>)}
-            {results.length === 0 && <p className="text-muted-foreground">{t({ hi: "दिए गए जवाबों से कोई संभावित योजना नहीं मिली। अपने ज़िले के ट्रस्ट सहायता केंद्र से जानकारी लें।", en: "No possible matches were found for these answers. Contact a trust help centre in your district for assistance." })}</p>}
-          </div>}
+          {!loadingResults && !resultError && (
+            <div className="mt-6 grid gap-5 sm:grid-cols-2">
+              {results.map((s) => (
+                <div key={s.id}>
+                  <SchemeCard s={s} />
+                  {s.match?.rulesApplied.length ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {t({ hi: "मिलाए गए नियम: ", en: "Rules matched: " })}{describeRules(s.match.rulesApplied, t)}
+                    </p>
+                  ) : null}
+                  {s.match?.unansweredRules.length ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {t({ hi: "इन बातों की पुष्टि बाकी है: ", en: "Still to confirm: " })}{describeRules(s.match.unansweredRules, t)}
+                    </p>
+                  ) : null}
+                  {s.match?.hasStructuredRules === false && (
+                    <p className="mt-1 text-xs text-muted-foreground italic">
+                      {t({ hi: "इस योजना के लिए संरचित पात्रता नियम अभी उपलब्ध नहीं हैं। आधिकारिक स्रोत से जाँचें।", en: "No structured eligibility rules are available for this scheme. Check the official source." })}
+                    </p>
+                  )}
+                </div>
+              ))}
+              {results.length === 0 && (
+                <div className="col-span-full space-y-3">
+                  <p className="text-muted-foreground">
+                    {t({ hi: "दिए गए जवाबों से कोई संभावित योजना नहीं मिली।", en: "No possible matches were found for these answers." })}
+                  </p>
+                  <div className="rounded-xl bg-muted/60 p-4 text-sm space-y-1">
+                    <p className="font-semibold">{t({ hi: "सहायता के लिए:", en: "For help:" })}</p>
+                    <p>{t({ hi: "• मध्य प्रदेश CM हेल्पलाइन: 181 (निःशुल्क)", en: "• Madhya Pradesh CM Helpline: 181 (toll-free)" })}</p>
+                    <p>{t({ hi: "• अपने ज़िले के ट्रस्ट सहायता केंद्र से संपर्क करें।", en: "• Contact a trust help centre in your district." })}</p>
+                    <p className="text-xs text-muted-foreground">{t({ hi: "या नीचे 'सभी योजनाएँ' देखें।", en: "Or browse all schemes below." })}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <div className="mt-8 flex flex-wrap gap-3">
             <button onClick={() => { setStep(0); setProfile({}); setResults([]); setResultError(null); setAnswer(null); }} className="btn-big border bg-card"><RotateCcw className="size-5" /> {t({ hi: "फिर से शुरू करें", en: "Start again" })}</button>
             <Link to="/schemes" className="btn-big bg-ink text-ink-foreground">{t({ hi: "सभी योजनाएँ", en: "All schemes" })}</Link>
@@ -203,7 +238,17 @@ function Finder() {
           <input value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={2000} required placeholder={t({ hi: "जैसे: विधवा पेंशन के लिए कौन से कागज़ चाहिए?", en: "e.g. Which documents are needed for widow pension?" })} className="h-12 rounded-xl border bg-card px-3" />
           <button disabled={asking || !question.trim()} className="btn-big bg-primary text-primary-foreground disabled:opacity-60">{asking ? t({ hi: "जवाब तैयार हो रहा है…", en: "Thinking…" }) : t({ hi: "पूछें", en: "Ask" })}</button>
         </form>
-        {assistantError && <p role="alert" className="mt-3 text-sm text-destructive">{assistantError}</p>}
+        {assistantError && (
+          <div role="alert" className="mt-3 rounded-xl bg-destructive/10 p-4 text-sm text-destructive space-y-2">
+            <p>{assistantError}</p>
+            <p className="text-muted-foreground text-xs">
+              {t({
+                hi: "सहायता के लिए MP CM हेल्पलाइन 181 (निःशुल्क) पर कॉल करें या ट्रस्ट के सत्यापित संपर्क विवरण से जानकारी लें।",
+                en: "For help, call MP CM Helpline 181 (toll-free) or refer to the trust's verified contact details.",
+              })}
+            </p>
+          </div>
+        )}
         {answer && <div className="mt-4 rounded-xl bg-secondary p-4 whitespace-pre-wrap" aria-live="polite">{answer}</div>}
       </section>
     </div>

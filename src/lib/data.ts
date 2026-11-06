@@ -54,7 +54,7 @@ export type Scheme = {
   code?: string | null;
   sourceUrl?: string | null;
   lastCheckedAt?: string | null;
-  match?: { rulesApplied: string[]; unansweredRules: string[] };
+  match?: { rulesApplied: string[]; unansweredRules: string[]; hasStructuredRules?: boolean };
   aiSummaryDraftHi?: string | null;
   aiSummaryApproved?: boolean;
   officialNoticeText?: string | null;
