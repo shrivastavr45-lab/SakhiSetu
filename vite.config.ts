@@ -13,7 +13,13 @@ export default defineConfig({
   vite: {
     server: {
       proxy: {
-        "/api": { target: process.env["API_PROXY_TARGET"] ?? localEnv["API_PROXY_TARGET"] ?? "http://localhost:4000", changeOrigin: true },
+        "/api": {
+          target:
+            process.env["API_PROXY_TARGET"] ??
+            localEnv["API_PROXY_TARGET"] ??
+            "http://localhost:4000",
+          changeOrigin: true,
+        },
       },
     },
   },
@@ -25,5 +31,14 @@ export default defineConfig({
   // Configure Nitro Cloudflare Worker entry point to handle /api/* with runtime env
   nitro: {
     entry: "src/entry.cloudflare.ts",
+    cloudflare: {
+      wrangler: {
+        name: "sakhisetu",
+        vars: {
+          BACKEND_URL: "https://sakhisetu.onrender.com",
+        },
+        keep_vars: true,
+      },
+    },
   } as unknown as { preset?: string },
 });
