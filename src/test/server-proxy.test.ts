@@ -6,6 +6,7 @@ import serverDefault, {
   resolveWorkerEnv,
   type WorkerEnv,
 } from "../server";
+import entryCloudflareDefault from "../entry.cloudflare";
 
 describe("Cloudflare Worker runtime proxy & environment resolution", () => {
   const originalGlobalEnv = (globalThis as unknown as { __env__?: unknown }).__env__;
@@ -249,7 +250,7 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
       const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com/" });
 
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      const [calledUrl, calledInit] = fetchSpy.mock.calls[0];
+      const [calledUrl, calledInit] = fetchSpy.mock.calls[0]!;
 
       // Verifies URL construction with trailing slash trimmed
       expect(calledUrl).toBe("https://backend.example.com/api/schemes?need=education&page=1");
@@ -284,37 +285,67 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
     });
   });
 
-  describe("default.fetch Cloudflare runtime integration", () => {
-    it("handles /api/schemes with undefined env parameter by reading globalThis.__env__", async () => {
-      // Simulate Cloudflare Workers + Nitro execution:
-      // Nitro sets globalThis.__env__ and request.runtime.cloudflare.env,
-      // but passes (request) to ssr.fetch() with env=undefined!
-      (globalThis as unknown as { __env__?: unknown }).__env__ = {
-        BACKEND_URL: "https://sakhisetu.onrender.com",
-      };
-
-      const req = new Request("https://sakhisetu.test/api/schemes") as Request & {
-        runtime?: { cloudflare?: { env?: WorkerEnv } };
-      };
-      req.runtime = {
-        cloudflare: {
-          env: { BACKEND_URL: "https://sakhisetu.onrender.com" },
+  describe("Cloudflare Worker entry-point fetch handler integration", () => {
+    it("handles /api/schemes using authentic Cloudflare Worker env binding directly", async () => {
+      const proto = {};
+      Object.defineProperty(proto, "BACKEND_URL", {
+        get() {
+          return "https://sakhisetu.onrender.com";
         },
-      };
+        enumerable: true,
+      });
+      const workerEnv = Object.create(proto) as WorkerEnv;
 
-      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: [{ id: "sch-1", title: "Test Scheme" }] }), {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [{ id: "sch-1", title: "Sakhi Scheme" }] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
       );
 
-      // env is undefined here, simulating exactly what Nitro does in lazyService!
-      const res = await serverDefault.fetch(req, undefined as unknown as WorkerEnv, undefined);
+      const req = new Request("https://sakhisetu.shrivastavr45.workers.dev/api/schemes");
+      const ctx = { waitUntil: vi.fn() };
+
+      const res = await entryCloudflareDefault.fetch(req, workerEnv, ctx);
 
       expect(res.status).toBe(200);
       const json = await res.json();
-      expect(json).toEqual({ data: [{ id: "sch-1", title: "Test Scheme" }] });
+      expect(json).toEqual({ data: [{ id: "sch-1", title: "Sakhi Scheme" }] });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const [upstreamUrl] = fetchSpy.mock.calls[0]!;
+      expect(upstreamUrl).toBe("https://sakhisetu.onrender.com/api/schemes");
+    });
+
+    it("returns 502 with PROXY_MISCONFIGURED when BACKEND_URL is not present on Cloudflare Worker env", async () => {
+      const req = new Request("https://sakhisetu.shrivastavr45.workers.dev/api/schemes");
+      const ctx = { waitUntil: vi.fn() };
+
+      const res = await entryCloudflareDefault.fetch(req, {} as WorkerEnv, ctx);
+
+      expect(res.status).toBe(502);
+      const json = await res.json();
+      expect(json.error?.code).toBe("PROXY_MISCONFIGURED");
+    });
+
+    it("serves static assets via env.ASSETS binding when requested", async () => {
+      const assetFetchMock = vi.fn().mockResolvedValueOnce(
+        new Response("robots content", {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        }),
+      );
+      const workerEnv = {
+        ASSETS: { fetch: assetFetchMock },
+      } as unknown as WorkerEnv;
+
+      const req = new Request("https://sakhisetu.shrivastavr45.workers.dev/robots.txt");
+      const ctx = { waitUntil: vi.fn() };
+
+      const res = await entryCloudflareDefault.fetch(req, workerEnv, ctx);
+
+      expect(res.status).toBe(200);
+      expect(assetFetchMock).toHaveBeenCalledWith(req);
     });
   });
 });

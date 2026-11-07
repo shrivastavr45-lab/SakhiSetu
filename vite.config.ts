@@ -22,4 +22,8 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // Configure Nitro Cloudflare Worker entry point to handle /api/* with runtime env
+  nitro: {
+    entry: "src/entry.cloudflare.ts",
+  } as unknown as { preset?: string },
 });

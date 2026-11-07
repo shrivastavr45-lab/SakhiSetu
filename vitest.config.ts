@@ -11,6 +11,10 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
   },
   resolve: {
-    alias: { "@": path.resolve(__dirname, "./src") },
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+      "#nitro/virtual/polyfills": path.resolve(__dirname, "./src/test/mocks/empty.ts"),
+      "#nitro/virtual/public-assets": path.resolve(__dirname, "./src/test/mocks/nitro-public-assets.ts"),
+    },
   },
 });
