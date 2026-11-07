@@ -261,8 +261,11 @@ export async function receiptPdf(receiptId: string, user: SessionUser, downloadT
     ["Donation frequency", donation.frequency === "MONTHLY" ? "Monthly intention (no recurring charge created)" : "One-time"],
     ["Campaign", donation.campaign.titleEn],
     ["Payment status", "SUCCEEDED — TEST MODE ONLY"],
-    ["Trust PAN", env.TRUST_PAN],
-    ["Trust 80G registration", env.TRUST_80G_REGISTRATION],
+    // In demo mode, trust credentials are synthetic — label them explicitly so
+    // there is no ambiguity about their status. In live mode, the real values
+    // are used (env.ts production guards ensure they have been verified).
+    ["Trust PAN", env.DEPLOYMENT_MODE === "demo" ? "[DEMO — NOT A REAL REGISTRATION]" : env.TRUST_PAN],
+    ["Trust 80G registration", env.DEPLOYMENT_MODE === "demo" ? "[DEMO — NOT A REAL REGISTRATION]" : env.TRUST_80G_REGISTRATION],
   ];
   for (const [label, value] of rows) {
     const y = doc.y;

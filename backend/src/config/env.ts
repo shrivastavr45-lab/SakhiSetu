@@ -11,6 +11,17 @@ dotenv.config({ path: process.env.ENV_FILE ?? (existsSync(rootEnvPath) ? rootEnv
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  /** Deployment intent.
+   *  - "live"  (default) — a genuine charitable deployment; production startup
+   *    guards require verified trust registration credentials.
+   *  - "demo"  — a demonstration deployment; synthetic trust credentials are
+   *    permitted, but all TEST/PREVIEW disclaimers remain and real security
+   *    controls (HTTPS, strong secrets, secure cookies) are still enforced.
+   *
+   *  DEPLOYMENT_MODE has no effect outside NODE_ENV=production.
+   *  It does NOT enable real payments; PAYMENT_MODE=mock is the only option.
+   */
+  DEPLOYMENT_MODE: z.enum(["live", "demo"]).default("live"),
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   FRONTEND_ORIGIN: z.string().url().default("http://localhost:3000"),
   DATABASE_URL: z.string().url().refine((value) => {
@@ -43,6 +54,9 @@ if (!parsed.success) {
 export const env = parsed.data;
 
 if (env.NODE_ENV === "production") {
+  // ── Guards that apply to BOTH live and demo deployments ──────────────────
+  // These protect security properties that must hold regardless of whether the
+  // deployment uses real or synthetic trust credentials.
   if (env.JWT_SECRET === "replace-with-at-least-32-random-characters") {
     throw new Error("JWT_SECRET must be replaced before production startup.");
   }
@@ -52,10 +66,18 @@ if (env.NODE_ENV === "production") {
   if (!env.COOKIE_SECURE) throw new Error("COOKIE_SECURE must be true in production.");
   if (!env.FRONTEND_ORIGIN.startsWith("https://")) throw new Error("FRONTEND_ORIGIN must use HTTPS in production.");
   if (env.ADMIN_PASSWORD === "SakhiDemo!2026") throw new Error("ADMIN_PASSWORD must be replaced before production seeding.");
-  if (env.TRUST_PAN === "NOT-CONFIGURED-DEMO" || env.TRUST_80G_REGISTRATION === "NOT-CONFIGURED-DEMO") {
-    throw new Error("Trust PAN and 80G registration details must be verified before production setup.");
-  }
-  if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(env.TRUST_PAN)) {
-    throw new Error("TRUST_PAN must be a verified PAN in the expected format before production setup.");
+
+  // ── Guards that apply only to live (genuine charitable) deployments ───────
+  // Demo deployments are explicitly allowed to use synthetic trust credentials
+  // because all generated receipts are already marked TEST/PREVIEW and
+  // NOT VALID FOR TAX CLAIMS. The PDF also displays the credentials as
+  // [DEMO — NOT A REAL REGISTRATION] when DEPLOYMENT_MODE=demo.
+  if (env.DEPLOYMENT_MODE === "live") {
+    if (env.TRUST_PAN === "NOT-CONFIGURED-DEMO" || env.TRUST_80G_REGISTRATION === "NOT-CONFIGURED-DEMO") {
+      throw new Error("Trust PAN and 80G registration details must be verified before live production setup. Set DEPLOYMENT_MODE=demo if this is a demonstration deployment.");
+    }
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(env.TRUST_PAN)) {
+      throw new Error("TRUST_PAN must be a verified PAN in the expected format before live production setup.");
+    }
   }
 }

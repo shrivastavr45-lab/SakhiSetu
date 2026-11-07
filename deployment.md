@@ -136,6 +136,54 @@ Do not use these credentials in any deployed environment.
 
 ## Production deployment
 
+### Demo deployment vs live deployment
+
+SakhiSetu supports two production deployment modes, controlled by `DEPLOYMENT_MODE`:
+
+| Mode | When to use | Trust credentials | Receipt disclaimers |
+|---|---|---|---|
+| `live` | Genuine charitable deployment | Must be verified; PAN format enforced | TEST/PREVIEW (always) |
+| `demo` | Demonstration / showcase | Synthetic credentials allowed | TEST/PREVIEW (always) + `[DEMO — NOT A REAL REGISTRATION]` |
+
+**Demo mode is not a weaker mode** — it still enforces HTTPS, strong JWT secret, valid PII encryption key, secure cookies, and a non-default admin password. It only relaxes the requirement for verified trust registration credentials, because the receipts it generates are already irrevocably marked as invalid for tax purposes.
+
+**Demo deployment environment (Render):**
+
+Use these values in `DEPLOYMENT_MODE=demo` to deploy this as a showcase without real trust credentials:
+
+```
+NODE_ENV=production
+DEPLOYMENT_MODE=demo
+DATABASE_URL=<your Neon connection string>
+FRONTEND_ORIGIN=https://<your-pages>.pages.dev
+JWT_SECRET=<openssl rand -base64 48>
+JWT_EXPIRES_IN=2h
+COOKIE_SECURE=true
+PAYMENT_MODE=mock
+PII_ENCRYPTION_KEY=<openssl rand -hex 32>
+GEMINI_API_KEY=<your key or blank>
+GEMINI_MODEL=gemini-3.5-flash
+PDF_FONT_PATH=
+PDF_FONT_BOLD_PATH=
+TRUST_NAME=SakhiSetu Demonstration Trust
+TRUST_ADDRESS=Bhopal, Madhya Pradesh
+TRUST_PAN=NOT-CONFIGURED-DEMO
+TRUST_80G_REGISTRATION=NOT-CONFIGURED-DEMO
+ADMIN_EMAIL=admin@yourdomain.org
+ADMIN_PASSWORD=<strong password ≥ 12 chars>
+```
+
+What changes in demo mode PDFs:
+- "Trust PAN" row shows `[DEMO — NOT A REAL REGISTRATION]`
+- "Trust 80G registration" row shows `[DEMO — NOT A REAL REGISTRATION]`
+- All existing disclaimers remain: "TEST / PREVIEW — NOT VALID FOR TAX CLAIMS", "DEMO DOCUMENT — DO NOT SUBMIT TO THE INCOME TAX DEPARTMENT", and the footer note about demo placeholders
+
+What does not change in demo mode:
+- `PAYMENT_MODE=mock` — no real payments
+- Receipt numbering, PDF generation, access control
+- All security headers, rate limits, authentication
+- `COOKIE_SECURE=true`, HTTPS `FRONTEND_ORIGIN`, strong secrets still required
+
 ### Step 1 — Backend: Render Web Service
 
 #### 1a — Create the service
@@ -359,7 +407,7 @@ npx prisma migrate dev
 | `COOKIE_SECURE=true` in production | Enforced by startup guard |
 | `FRONTEND_ORIGIN` is an `https://` URL | Enforced by startup guard |
 | `ADMIN_PASSWORD` is not `SakhiDemo!2026` | Enforced by startup guard |
-| `TRUST_PAN` and `TRUST_80G_REGISTRATION` are not `NOT-CONFIGURED-DEMO` | Enforced by startup guard |
+| `TRUST_PAN` and `TRUST_80G_REGISTRATION` are not `NOT-CONFIGURED-DEMO` | Required in `live` mode; `demo` mode allows synthetic credentials |
 | `.env` and `backend/.env` are gitignored | Confirmed in `.gitignore` |
 | Stack traces suppressed in production responses | Yes — `error-handler.ts` |
 | `X-Test-Payment-Outcome` removed from CORS in production | Yes — `app.ts` |
@@ -541,6 +589,7 @@ eligibility (`/api/eligibility`), admin routes (`/api/admin/*`), health check
 
 ```
 NODE_ENV=production
+DEPLOYMENT_MODE=demo          # or "live" for a genuine charitable deployment
 DATABASE_URL=postgresql://...neon.tech/sakhisetu?sslmode=require
 FRONTEND_ORIGIN=https://sakhisetu.pages.dev
 JWT_SECRET=<openssl rand -base64 48>
@@ -552,10 +601,10 @@ GEMINI_MODEL=gemini-3.5-flash
 PDF_FONT_PATH=
 PDF_FONT_BOLD_PATH=
 PII_ENCRYPTION_KEY=<openssl rand -hex 32>
-TRUST_NAME=<verified trust legal name>
-TRUST_ADDRESS=<verified trust registered address>
-TRUST_PAN=<verified trust PAN>
-TRUST_80G_REGISTRATION=<verified 80G number>
+TRUST_NAME=<trust name>
+TRUST_ADDRESS=<trust address>
+TRUST_PAN=NOT-CONFIGURED-DEMO              # demo mode only; live mode requires verified PAN
+TRUST_80G_REGISTRATION=NOT-CONFIGURED-DEMO # demo mode only; live mode requires verified number
 ADMIN_EMAIL=admin@yourdomain.org
 ADMIN_PASSWORD=<strong password ≥ 12 chars>
 ```
