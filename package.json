@@ -20,7 +20,7 @@
     "db:migrate": "dotenv -e backend/.env -- prisma migrate deploy --schema backend/prisma/schema.prisma",
     "db:migrate:dev": "dotenv -e backend/.env -- prisma migrate dev --schema backend/prisma/schema.prisma",
     "db:seed": "dotenv -e backend/.env -- tsx backend/prisma/seed.ts",
-    "test:backend": "node --experimental-strip-types --test backend/tests/eligibility.test.mjs backend/tests/donation-helpers.test.mjs backend/tests/admin-donations.test.mjs backend/tests/donor-records.test.mjs backend/tests/reports.test.mjs backend/tests/scheme-import-csv.test.mjs backend/tests/scheme-import-mapping.test.mjs && node --experimental-strip-types --test backend/tests/receipt.test.mjs",
+    "test:backend": "node --experimental-strip-types --test backend/tests/eligibility.test.mjs backend/tests/donation-helpers.test.mjs backend/tests/admin-donations.test.mjs backend/tests/donor-records.test.mjs backend/tests/reports.test.mjs backend/tests/scheme-import-csv.test.mjs backend/tests/scheme-import-mapping.test.mjs backend/tests/scheme-list.test.mjs backend/tests/donation-validation.test.mjs && node --experimental-strip-types --test backend/tests/receipt.test.mjs",
     "build:all": "npm run build && npm run build:backend",
     "test:all": "npm test && npm run test:backend"
   },
