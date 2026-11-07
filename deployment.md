@@ -199,7 +199,7 @@ What does not change in demo mode:
 | **Runtime** | Node |
 | **Branch** | `main` |
 | **Root Directory** | *(leave empty — project root)* |
-| **Build Command** | `npm install && npm run build:backend && npm run db:generate` |
+| **Build Command** | `npm install && npm run db:generate && npm run build:backend` |
 | **Start Command** | `npm run start:backend` |
 | **Plan** | Free (or Starter for production SLA) |
 | **Health Check Path** | `/api/health` |

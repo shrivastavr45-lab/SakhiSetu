@@ -22,7 +22,7 @@ services:
 
     # Render checks out the repo root; backend/ is a sub-directory.
     # All commands below are relative to the project root.
-    buildCommand: npm install && npm run build:backend && npm run db:generate
+    buildCommand: npm install && npm run db:generate && npm run build:backend
     startCommand: npm run start:backend
 
     # Render injects PORT automatically; our server reads process.env.PORT.
