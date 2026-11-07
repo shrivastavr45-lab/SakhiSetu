@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import serverDefault, {
+  extractBackendUrl,
   proxyToBackend,
   resolveWorkerContext,
   resolveWorkerEnv,
@@ -8,10 +9,13 @@ import serverDefault, {
 
 describe("Cloudflare Worker runtime proxy & environment resolution", () => {
   const originalGlobalEnv = (globalThis as unknown as { __env__?: unknown }).__env__;
+  const originalGlobalScopeBackendUrl = (globalThis as unknown as { BACKEND_URL?: unknown })
+    .BACKEND_URL;
   const originalProcessBackendUrl = process.env["BACKEND_URL"];
 
   beforeEach(() => {
     delete (globalThis as unknown as { __env__?: unknown }).__env__;
+    delete (globalThis as unknown as { BACKEND_URL?: unknown }).BACKEND_URL;
     delete process.env["BACKEND_URL"];
   });
 
@@ -20,6 +24,13 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
       (globalThis as unknown as { __env__?: unknown }).__env__ = originalGlobalEnv;
     } else {
       delete (globalThis as unknown as { __env__?: unknown }).__env__;
+    }
+
+    if (originalGlobalScopeBackendUrl !== undefined) {
+      (globalThis as unknown as { BACKEND_URL?: unknown }).BACKEND_URL =
+        originalGlobalScopeBackendUrl;
+    } else {
+      delete (globalThis as unknown as { BACKEND_URL?: unknown }).BACKEND_URL;
     }
 
     if (originalProcessBackendUrl !== undefined) {
@@ -31,14 +42,65 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
     vi.restoreAllMocks();
   });
 
-  describe("resolveWorkerEnv", () => {
-    it("resolves from passedEnv argument when provided", () => {
-      const passedEnv: WorkerEnv = { BACKEND_URL: "https://passed-env.example.com" };
-      const env = resolveWorkerEnv(undefined, passedEnv);
-      expect(env.BACKEND_URL).toBe("https://passed-env.example.com");
+  describe("extractBackendUrl", () => {
+    it("extracts BACKEND_URL from plain object", () => {
+      expect(extractBackendUrl({ BACKEND_URL: "https://backend.example.com" })).toBe(
+        "https://backend.example.com",
+      );
     });
 
-    it("resolves from request.runtime.cloudflare.env (Nitro Cloudflare module runtime)", () => {
+    it("extracts BACKEND_URL from prototype getter (regression for Object.assign bug in 36cd294)", () => {
+      // In workerd / V8 host objects, bindings are often accessors on the prototype
+      // where Object.keys() returns [] and Object.assign({}, env) drops them.
+      const proto = {};
+      Object.defineProperty(proto, "BACKEND_URL", {
+        get() {
+          return "https://host-accessor.example.com";
+        },
+        enumerable: true,
+      });
+      const hostEnv = Object.create(proto);
+
+      expect(Object.keys(hostEnv)).toHaveLength(0);
+      expect(extractBackendUrl(hostEnv)).toBe("https://host-accessor.example.com");
+    });
+
+    it("extracts BACKEND_URL from a Proxy object without own keys", () => {
+      const proxyEnv = new Proxy(
+        {},
+        {
+          get(_target, prop) {
+            if (prop === "BACKEND_URL") return "https://proxy-binding.example.com";
+            return undefined;
+          },
+          ownKeys() {
+            return [];
+          },
+        },
+      );
+
+      expect(Object.keys(proxyEnv)).toHaveLength(0);
+      expect(extractBackendUrl(proxyEnv)).toBe("https://proxy-binding.example.com");
+    });
+
+    it("returns undefined for null, undefined, non-string, or empty string", () => {
+      expect(extractBackendUrl(null)).toBeUndefined();
+      expect(extractBackendUrl(undefined)).toBeUndefined();
+      expect(extractBackendUrl({})).toBeUndefined();
+      expect(extractBackendUrl({ BACKEND_URL: "" })).toBeUndefined();
+      expect(extractBackendUrl({ BACKEND_URL: "   " })).toBeUndefined();
+      expect(extractBackendUrl({ BACKEND_URL: 12345 })).toBeUndefined();
+    });
+  });
+
+  describe("resolveWorkerEnv", () => {
+    it("resolves from passedEnv argument when provided", async () => {
+      const passedEnv: WorkerEnv = { BACKEND_URL: "https://passed-env.example.com" };
+      const env = await resolveWorkerEnv(undefined, passedEnv);
+      expect(extractBackendUrl(env)).toBe("https://passed-env.example.com");
+    });
+
+    it("resolves from request.runtime.cloudflare.env (Nitro Cloudflare module runtime)", async () => {
       const req = new Request("https://sakhisetu.test/api/health") as Request & {
         runtime?: { cloudflare?: { env?: WorkerEnv } };
       };
@@ -48,63 +110,72 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
         },
       };
 
-      const env = resolveWorkerEnv(req, undefined);
-      expect(env.BACKEND_URL).toBe("https://nitro-runtime-req.example.com");
+      const env = await resolveWorkerEnv(req, undefined);
+      expect(extractBackendUrl(env)).toBe("https://nitro-runtime-req.example.com");
     });
 
-    it("resolves from globalThis.__env__ (Nitro Cloudflare global handler)", () => {
+    it("resolves from request.context.cloudflare.env (H3 event context)", async () => {
+      const req = new Request("https://sakhisetu.test/api/health") as Request & {
+        context?: { cloudflare?: { env?: WorkerEnv } };
+      };
+      req.context = {
+        cloudflare: {
+          env: { BACKEND_URL: "https://h3-context.example.com" },
+        },
+      };
+
+      const env = await resolveWorkerEnv(req, undefined);
+      expect(extractBackendUrl(env)).toBe("https://h3-context.example.com");
+    });
+
+    it("resolves from globalThis.__env__ (Nitro Cloudflare global handler)", async () => {
       (globalThis as unknown as { __env__?: unknown }).__env__ = {
         BACKEND_URL: "https://nitro-global-env.example.com",
       };
 
-      const env = resolveWorkerEnv(undefined, undefined);
-      expect(env.BACKEND_URL).toBe("https://nitro-global-env.example.com");
+      const env = await resolveWorkerEnv(undefined, undefined);
+      expect(extractBackendUrl(env)).toBe("https://nitro-global-env.example.com");
     });
 
-    it("falls back to process.env.BACKEND_URL when available", () => {
-      process.env["BACKEND_URL"] = "https://process-env.example.com";
-      const env = resolveWorkerEnv(undefined, undefined);
-      expect(env.BACKEND_URL).toBe("https://process-env.example.com");
+    it("resolves from globalThis.BACKEND_URL (Cloudflare dashboard global scope)", async () => {
+      (globalThis as unknown as { BACKEND_URL?: unknown }).BACKEND_URL =
+        "https://global-scope-binding.example.com";
+
+      const env = await resolveWorkerEnv(undefined, undefined);
+      expect(extractBackendUrl(env)).toBe("https://global-scope-binding.example.com");
     });
 
-    it("prioritizes passedEnv > request.runtime > globalThis.__env__ > process.env", () => {
-      process.env["BACKEND_URL"] = "https://level-4-process.example.com";
-      (globalThis as unknown as { __env__?: unknown }).__env__ = {
-        BACKEND_URL: "https://level-3-global.example.com",
-      };
+    it("does NOT treat process.env as a substitute for Worker runtime bindings", async () => {
+      // User requirement 3: Do not use process.env as a substitute for Worker runtime bindings.
+      process.env["BACKEND_URL"] = "https://process-env-should-not-be-used.example.com";
 
-      const req = new Request("https://sakhisetu.test/api/health") as Request & {
-        runtime?: { cloudflare?: { env?: WorkerEnv } };
-      };
-      req.runtime = {
-        cloudflare: {
-          env: { BACKEND_URL: "https://level-2-req.example.com" },
+      const env = await resolveWorkerEnv(undefined, undefined);
+      // In Worker runtime, process.env should not be used as the binding source
+      expect(extractBackendUrl(env)).toBeUndefined();
+    });
+
+    it("preserves prototype getters in host objects without erasing them", async () => {
+      const proto = {};
+      Object.defineProperty(proto, "BACKEND_URL", {
+        get() {
+          return "https://host-env.example.com";
         },
-      };
+        enumerable: true,
+      });
+      const hostEnv = Object.create(proto);
 
-      // When passedEnv is present, it wins
-      expect(
-        resolveWorkerEnv(req, { BACKEND_URL: "https://level-1-passed.example.com" }).BACKEND_URL,
-      ).toBe("https://level-1-passed.example.com");
-
-      // When passedEnv is undefined, request.runtime wins
-      expect(resolveWorkerEnv(req, undefined).BACKEND_URL).toBe("https://level-2-req.example.com");
-
-      // When request has no runtime, globalThis.__env__ wins
-      const plainReq = new Request("https://sakhisetu.test/api/health");
-      expect(resolveWorkerEnv(plainReq, undefined).BACKEND_URL).toBe(
-        "https://level-3-global.example.com",
-      );
+      const env = await resolveWorkerEnv(undefined, hostEnv);
+      expect(extractBackendUrl(env)).toBe("https://host-env.example.com");
     });
   });
 
   describe("resolveWorkerContext", () => {
-    it("returns passedCtx if supplied", () => {
+    it("returns passedCtx if supplied", async () => {
       const dummyCtx = { waitUntil: vi.fn() };
-      expect(resolveWorkerContext(undefined, dummyCtx)).toBe(dummyCtx);
+      expect(await resolveWorkerContext(undefined, dummyCtx)).toBe(dummyCtx);
     });
 
-    it("resolves from request.runtime.cloudflare.context", () => {
+    it("resolves from request.runtime.cloudflare.context", async () => {
       const dummyCtx = { waitUntil: vi.fn() };
       const req = new Request("https://sakhisetu.test/api/health") as Request & {
         runtime?: { cloudflare?: { context?: unknown } };
@@ -115,18 +186,42 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
         },
       };
 
-      expect(resolveWorkerContext(req, undefined)).toBe(dummyCtx);
+      expect(await resolveWorkerContext(req, undefined)).toBe(dummyCtx);
     });
   });
 
   describe("proxyToBackend", () => {
-    it("returns 502 with PROXY_MISCONFIGURED when BACKEND_URL is missing", async () => {
+    it("returns 502 with PROXY_MISCONFIGURED when BACKEND_URL is completely missing", async () => {
       const req = new Request("https://sakhisetu.test/api/health");
       const res = await proxyToBackend(req, {});
 
       expect(res.status).toBe(502);
       const json = await res.json();
       expect(json.error?.code).toBe("PROXY_MISCONFIGURED");
+    });
+
+    it("proxies successfully when env is a host object with a prototype getter", async () => {
+      const proto = {};
+      Object.defineProperty(proto, "BACKEND_URL", {
+        get() {
+          return "https://backend-prototype.example.com";
+        },
+      });
+      const hostEnv = Object.create(proto);
+
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { status: "ok" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      const req = new Request("https://sakhisetu.test/api/health");
+      const res = await proxyToBackend(req, hostEnv);
+
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json).toEqual({ data: { status: "ok" } });
     });
 
     it("forwards request method, query string, stripped headers, and returns upstream response", async () => {
@@ -190,7 +285,7 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
   });
 
   describe("default.fetch Cloudflare runtime integration", () => {
-    it("handles /api/health with undefined env parameter without throwing TypeError", async () => {
+    it("handles /api/schemes with undefined env parameter by reading globalThis.__env__", async () => {
       // Simulate Cloudflare Workers + Nitro execution:
       // Nitro sets globalThis.__env__ and request.runtime.cloudflare.env,
       // but passes (request) to ssr.fetch() with env=undefined!
@@ -198,7 +293,7 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
         BACKEND_URL: "https://sakhisetu.onrender.com",
       };
 
-      const req = new Request("https://sakhisetu.test/api/health") as Request & {
+      const req = new Request("https://sakhisetu.test/api/schemes") as Request & {
         runtime?: { cloudflare?: { env?: WorkerEnv } };
       };
       req.runtime = {
@@ -208,18 +303,18 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
       };
 
       vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { status: "ok", database: "connected" } }), {
+        new Response(JSON.stringify({ data: [{ id: "sch-1", title: "Test Scheme" }] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
       );
 
-      // Crucial: env is undefined here, simulating exactly what Nitro does in lazyService!
+      // env is undefined here, simulating exactly what Nitro does in lazyService!
       const res = await serverDefault.fetch(req, undefined as unknown as WorkerEnv, undefined);
 
       expect(res.status).toBe(200);
       const json = await res.json();
-      expect(json).toEqual({ data: { status: "ok", database: "connected" } });
+      expect(json).toEqual({ data: [{ id: "sch-1", title: "Test Scheme" }] });
     });
   });
 });

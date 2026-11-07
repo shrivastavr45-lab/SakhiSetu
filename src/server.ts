@@ -25,67 +25,153 @@ type ServerEntry = {
 export type WorkerEnv = {
   /** Full base URL of the Render backend Web Service, no trailing slash.
    *  Example: https://sakhisetu-api.onrender.com
-   *  Set in Cloudflare Pages / Workers → Settings → Variables and Secrets.
+   *  Set in Cloudflare Dashboard → Workers & Pages → Settings → Variables and Secrets.
    *  When absent the proxy returns 502 with a clear error.
    */
   BACKEND_URL?: string;
   [key: string]: unknown;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+/**
+ * Safely extract BACKEND_URL from any candidate environment object,
+ * accessor, Proxy, or global scope without cloning or relying on own enumerable keys.
+ */
+export function extractBackendUrl(candidate: unknown): string | undefined {
+  if (!candidate || (typeof candidate !== "object" && typeof candidate !== "function")) {
+    return undefined;
+  }
+  try {
+    const val = (candidate as Record<string, unknown>)["BACKEND_URL"];
+    if (typeof val === "string" && val.trim() !== "") {
+      return val.trim();
+    }
+  } catch {
+    // Ignore getter throw
+  }
+  return undefined;
 }
 
 /**
- * Resolve Cloudflare Worker environment variables and bindings reliably across runtimes.
+ * Safely import cloudflare:workers module in Cloudflare Workers runtime.
+ * Using a variable specifier and /* @vite-ignore *\/ ensures Vite transform
+ * does not fail during Node.js compilation/testing.
+ */
+async function importCloudflareWorkersModule(): Promise<{
+  env?: WorkerEnv;
+  default?: { env?: WorkerEnv };
+  waitUntil?: (promise: Promise<unknown>) => void;
+} | null> {
+  try {
+    const specifier = "cloudflare:workers";
+    return (await import(/* @vite-ignore */ specifier)) as {
+      env?: WorkerEnv;
+      default?: { env?: WorkerEnv };
+      waitUntil?: (promise: Promise<unknown>) => void;
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the Cloudflare Workers runtime environment for this request.
  *
  * In Nitro's Cloudflare module handler (`cloudflare-module`), Cloudflare invokes:
  *   fetch(request, env, context)
- * Nitro stores `env` onto:
- *   1. `request.runtime.cloudflare.env` (via `augmentReq`)
- *   2. `globalThis.__env__`
- * However, Nitro's internal SSR service dispatcher calls `mod.fetch(req)` passing
- * only `req`, leaving the 2nd argument (`env`) undefined when `src/server.ts` is invoked.
+ * Nitro stores `env` onto `request.runtime.cloudflare.env` and `globalThis.__env__`.
+ * In modern workerd runtime, bindings are also directly accessible via `cloudflare:workers` `env`.
  *
- * This function resolves the environment bindings by inspecting, in precedence order:
- * 1. Directly passed `passedEnv` argument (if supplied with properties, e.g. in tests/invocations)
- * 2. `request.runtime.cloudflare.env` (attached to the request by Nitro runtime)
- * 3. `globalThis.__env__` (attached globally by Nitro's Cloudflare handler)
- * 4. `globalThis.env` (native Cloudflare workerd global if present)
- * 5. `process.env` (Node/Vite local dev or testing fallback)
+ * This function locates the authentic runtime `env` object or wraps the resolved bindings,
+ * preserving all prototype getters, bindings, and Proxies.
  */
-export function resolveWorkerEnv(request?: Request, passedEnv?: unknown): WorkerEnv {
-  const sources: unknown[] = [
-    passedEnv,
-    (request as unknown as { runtime?: { cloudflare?: { env?: unknown } } })?.runtime?.cloudflare
-      ?.env,
-    (globalThis as unknown as { __env__?: unknown }).__env__,
-    (globalThis as unknown as { env?: unknown }).env,
-    typeof process !== "undefined" ? process?.env : undefined,
-  ];
-
-  const merged: Record<string, unknown> = {};
-  for (let i = sources.length - 1; i >= 0; i--) {
-    const src = sources[i];
-    if (isRecord(src)) {
-      Object.assign(merged, src);
-    }
+export async function resolveWorkerEnv(request?: Request, passedEnv?: unknown): Promise<WorkerEnv> {
+  // 1. Direct argument passed to fetch handler
+  if (extractBackendUrl(passedEnv)) {
+    return passedEnv as WorkerEnv;
   }
 
-  return merged as WorkerEnv;
+  // 2. Official Cloudflare Workers runtime API (workerd)
+  const cf = await importCloudflareWorkersModule();
+  const cfEnv = cf?.env ?? cf?.default?.env;
+  if (extractBackendUrl(cfEnv)) {
+    return cfEnv as WorkerEnv;
+  }
+
+  // 3. Request runtime bindings (Nitro augmentReq)
+  const reqRuntimeEnv = (request as unknown as { runtime?: { cloudflare?: { env?: unknown } } })
+    ?.runtime?.cloudflare?.env;
+  if (extractBackendUrl(reqRuntimeEnv)) {
+    return reqRuntimeEnv as WorkerEnv;
+  }
+
+  // 4. Request context bindings (H3 / Nitro event context)
+  const reqContextEnv =
+    (request as unknown as { context?: { cloudflare?: { env?: unknown }; env?: unknown } })?.context
+      ?.cloudflare?.env ?? (request as unknown as { context?: { env?: unknown } })?.context?.env;
+  if (extractBackendUrl(reqContextEnv)) {
+    return reqContextEnv as WorkerEnv;
+  }
+
+  // 5. Nitro Cloudflare handler global assignment
+  const nitroGlobalEnv = (globalThis as unknown as { __env__?: unknown }).__env__;
+  if (extractBackendUrl(nitroGlobalEnv)) {
+    return nitroGlobalEnv as WorkerEnv;
+  }
+
+  // 6. Global worker env binding
+  const globalEnv = (globalThis as unknown as { env?: unknown }).env;
+  if (extractBackendUrl(globalEnv)) {
+    return globalEnv as WorkerEnv;
+  }
+
+  // 7. Global scope variable (Cloudflare dashboard global or legacy binding)
+  const globalUrl = (globalThis as unknown as { BACKEND_URL?: unknown }).BACKEND_URL;
+  if (typeof globalUrl === "string" && globalUrl.trim() !== "") {
+    return { BACKEND_URL: globalUrl.trim() };
+  }
+
+  // 8. If passedEnv is provided as an object (even without BACKEND_URL), pass it along
+  if (passedEnv && typeof passedEnv === "object") {
+    return passedEnv as WorkerEnv;
+  }
+
+  // 9. Fallback to Nitro global or request runtime if present
+  if (reqRuntimeEnv && typeof reqRuntimeEnv === "object") {
+    return reqRuntimeEnv as WorkerEnv;
+  }
+  if (nitroGlobalEnv && typeof nitroGlobalEnv === "object") {
+    return nitroGlobalEnv as WorkerEnv;
+  }
+
+  return {};
 }
 
 /**
  * Resolve Cloudflare Worker execution context (e.g. waitUntil, passThroughOnException).
- *
- * Nitro attaches `context` to `request.runtime.cloudflare.context`.
  */
-export function resolveWorkerContext(request?: Request, passedCtx?: unknown): unknown {
+export async function resolveWorkerContext(
+  request?: Request,
+  passedCtx?: unknown,
+): Promise<unknown> {
   if (passedCtx !== undefined && passedCtx !== null) {
     return passedCtx;
   }
-  return (request as unknown as { runtime?: { cloudflare?: { context?: unknown } } })?.runtime
-    ?.cloudflare?.context;
+
+  const reqCtx =
+    (request as unknown as { runtime?: { cloudflare?: { context?: unknown } } })?.runtime
+      ?.cloudflare?.context ??
+    (request as unknown as { context?: { cloudflare?: { context?: unknown } } })?.context
+      ?.cloudflare?.context;
+  if (reqCtx !== undefined && reqCtx !== null) {
+    return reqCtx;
+  }
+
+  const cf = await importCloudflareWorkersModule();
+  if (typeof cf?.waitUntil === "function") {
+    return { waitUntil: cf.waitUntil };
+  }
+
+  return undefined;
 }
 
 /**
@@ -97,11 +183,11 @@ export function resolveWorkerContext(request?: Request, passedCtx?: unknown): un
  * - GET/HEAD requests are forwarded without a body.
  */
 export async function proxyToBackend(request: Request, env?: WorkerEnv): Promise<Response> {
-  const resolvedEnv = env && Object.keys(env).length > 0 ? env : resolveWorkerEnv(request);
-  const backendBase =
-    typeof resolvedEnv.BACKEND_URL === "string"
-      ? resolvedEnv.BACKEND_URL.trim().replace(/\/$/, "")
-      : "";
+  const resolvedEnv = extractBackendUrl(env)
+    ? (env as WorkerEnv)
+    : await resolveWorkerEnv(request, env);
+  const rawBackendUrl = extractBackendUrl(resolvedEnv);
+  const backendBase = rawBackendUrl ? rawBackendUrl.replace(/\/$/, "") : "";
 
   if (!backendBase) {
     return new Response(
@@ -109,7 +195,7 @@ export async function proxyToBackend(request: Request, env?: WorkerEnv): Promise
         error: {
           code: "PROXY_MISCONFIGURED",
           message:
-            "BACKEND_URL is not configured on this Pages deployment. Set it in Cloudflare Pages → Settings → Environment variables.",
+            "BACKEND_URL is not configured on this Cloudflare deployment. Set it in Cloudflare Dashboard → Workers & Pages → Settings → Variables and Secrets.",
         },
       }),
       { status: 502, headers: { "Content-Type": "application/json" } },
@@ -199,8 +285,8 @@ function isH3SwallowedErrorBody(body: string): boolean {
 
 export default {
   async fetch(request: Request, env?: WorkerEnv, ctx?: unknown) {
-    const resolvedEnv = resolveWorkerEnv(request, env);
-    const resolvedCtx = resolveWorkerContext(request, ctx);
+    const resolvedEnv = await resolveWorkerEnv(request, env);
+    const resolvedCtx = await resolveWorkerContext(request, ctx);
 
     // Proxy all /api/* requests to the Render backend before the SSR handler
     // sees them. This keeps the API and frontend on the same origin so that
