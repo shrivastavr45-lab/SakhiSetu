@@ -5,6 +5,7 @@
 | Layer | Platform | Notes |
 |---|---|---|
 | Frontend (SSR) | **Cloudflare Pages** | TanStack Start / Nitro builds a Cloudflare Worker; Render Static Site cannot host SSR |
+| API proxy | **Built into the SSR Worker** | `/api/*` requests are intercepted before SSR and forwarded to Render |
 | Backend API | **Render Web Service** (Node.js) | Express 5, TypeScript, port from `process.env.PORT` |
 | Database | **Neon PostgreSQL** (ap-southeast-1) | Existing managed database |
 
@@ -16,6 +17,19 @@
 > Cloudflare Pages hosts both the Worker and its static assets for free with
 > global CDN. Deploying the frontend to Render Static Site is not supported
 > by the current build toolchain.
+>
+> **How the API proxy works:**
+> The SSR Worker entry (`src/server.ts`) intercepts every request to `/api/*`
+> before passing it to the TanStack Start handler. It forwards the request to the
+> Render backend URL (`BACKEND_URL` env var), preserving all headers including
+> `Cookie` and `Set-Cookie`. This makes the API appear at the same Cloudflare
+> Pages origin so that `SameSite=Lax` session cookies work correctly without any
+> cross-origin issues.
+>
+> Note: Cloudflare Pages Functions (`/functions` directory) are **not used**
+> here. When a custom `_worker.js` / advanced mode Worker handles all routes
+> (as Nitro does), the `/functions` directory is silently ignored by Cloudflare.
+> The proxy runs inside the Nitro Worker itself.
 
 ---
 
@@ -247,13 +261,18 @@ the Worker (for server-rendered HTML) and the static asset bundle (CSS/JS).
 
 Set these in **Cloudflare Pages → Settings → Environment variables** (production):
 
-| Variable | Value |
-|---|---|
-| `VITE_API_BASE_URL` | `https://sakhisetu-api.onrender.com/api` *(your Render backend URL)* |
+| Variable | Value | Purpose |
+|---|---|---|
+| `BACKEND_URL` | `https://sakhisetu-api.onrender.com` | Backend URL for the API proxy in the SSR Worker |
+| `VITE_API_BASE_URL` | `/api` | Frontend API base (same-origin; stays `/api` because the proxy handles it) |
 
-> **`VITE_API_BASE_URL`** must be set at build time (Vite inlines it). Set it in
-> Cloudflare Pages environment variables, not at runtime. After changing it,
-> trigger a new build.
+> **`VITE_API_BASE_URL`** must be set at build time (Vite inlines it into the
+> client bundle). Set it to `/api` — the proxy in `src/server.ts` automatically
+> forwards `/api/*` requests to the `BACKEND_URL`.
+>
+> **`BACKEND_URL`** is read at Worker runtime (not build time). It tells the
+> proxy where to forward requests. Must be the full base URL of the Render service
+> with no trailing slash.
 
 #### 2c — SPA routing and page refresh
 
@@ -271,31 +290,15 @@ After both services are deployed:
 
 1. The Render backend `FRONTEND_ORIGIN` must exactly match the Cloudflare Pages domain:
    `https://sakhisetu.pages.dev` (or your custom domain if configured).
-2. The Cloudflare Pages `VITE_API_BASE_URL` must point to the Render service:
-   `https://sakhisetu-api.onrender.com/api`
-3. The session cookie uses `sameSite: lax`. Because the frontend (Cloudflare) and
-   API (Render) are on different domains, cookie-based auth will be blocked by
-   browsers for cross-site requests.
+2. The Cloudflare Pages `VITE_API_BASE_URL` is `/api` (same-origin proxy).
+3. The Cloudflare Pages `BACKEND_URL` must point to the Render service:
+   `https://sakhisetu-api.onrender.com`
+4. The SSR Worker intercepts `/api/*` and proxies it to `BACKEND_URL`.
+   Session cookies flow correctly because the browser and the API proxy
+   share the same Cloudflare Pages origin.
 
-> **Cross-origin cookie blocker:** `SameSite=Lax` cookies are sent on same-site
-> navigations only. A Cloudflare Pages frontend calling a Render API on a different
-> domain will have cookies blocked by modern browsers. The options are:
->
-> **Option A (recommended):** Route API calls through a Cloudflare Worker route
-> or Cloudflare Access proxy so the API appears at the same origin, e.g.
-> `/api/*` → `https://sakhisetu-api.onrender.com/api/*`.
-> Configure this in Cloudflare Pages → Functions → Routing, or using a
-> `_routes.json` + Worker fetch proxy (see Appendix A).
->
-> **Option B:** Change `sameSite: "none"` in `auth.service.ts` and add
-> `partitioned: true` to cookie options. Requires HTTPS on both origins and
-> may be blocked by privacy-focused browsers.
->
-> **Option C:** Deploy the backend also on Cloudflare Workers to share the
-> `.pages.dev` origin (advanced).
->
-> Option A is the most browser-compatible and requires the least code change.
-> See [Appendix A — Cloudflare Pages API proxy](#appendix-a--cloudflare-pages-api-proxy).
+The cross-origin cookie problem is solved by the built-in proxy.
+No `SameSite=None` changes or separate CORS configuration are required.
 
 ---
 
@@ -466,7 +469,9 @@ The backend cannot reach Neon. Check:
 
 This is the cross-origin cookie issue. The session cookie (`SameSite=Lax`)
 is blocked when the frontend domain differs from the API domain.
-Implement the Cloudflare Pages API proxy described in Appendix A.
+The built-in proxy in `src/server.ts` solves this: verify that `BACKEND_URL`
+is set correctly in Cloudflare Pages environment variables and that the
+production build (after setting `BACKEND_URL`) is deployed.
 
 ### PDF download returns `503 PDF_UNICODE_FONT_REQUIRED`
 
@@ -482,42 +487,51 @@ the Neon console (Compute → Resume) or configure Neon's "Always active" settin
 
 ---
 
-## Appendix A — Cloudflare Pages API proxy
+## Appendix A — API proxy implementation
 
-To route API calls through the same Cloudflare Pages origin and avoid the
-cross-origin cookie problem, add a `_routes.json` at the project root and a
-Cloudflare Pages Function that proxies `/api/*` to the Render backend.
+The proxy is implemented in `src/server.ts`, the Cloudflare Worker entry point
+compiled and bundled by Nitro into `.output/server/_ssr/ssr.mjs` on every build.
 
-**`public/_routes.json`** (place in the directory that becomes `.output/public/`):
-```json
-{
-  "version": 1,
-  "include": ["/*"],
-  "exclude": ["/assets/*"]
-}
+**How it works:**
+
+```
+Browser → GET/POST /api/...
+            ↓
+Cloudflare Pages Worker (src/server.ts)
+  if pathname.startsWith("/api/")
+    → forward to BACKEND_URL (Render)
+      preserve: method, headers (minus hop-by-hop), body
+      return: upstream status, headers (including Set-Cookie), body
+  else
+    → TanStack Start SSR handler (normal page rendering)
 ```
 
-**`functions/api/[[path]].ts`** (Cloudflare Pages Function):
-```typescript
-export const onRequest: PagesFunction = async (context) => {
-  const url = new URL(context.request.url);
-  const target = new URL(url.pathname + url.search, "https://sakhisetu-api.onrender.com");
-  return fetch(target.toString(), {
-    method: context.request.method,
-    headers: context.request.headers,
-    body: context.request.body,
-  });
-};
-```
+**Why the `/functions` directory does not work here:**
+Cloudflare Pages Functions (`/functions/*.ts`) are silently ignored when a
+custom Worker entry controls all routes (advanced mode). Nitro's Worker is
+advanced mode — it owns the entire request lifecycle.
 
-With this in place:
-- `VITE_API_BASE_URL` in Cloudflare Pages stays as `/api` (same-origin).
-- The Render `FRONTEND_ORIGIN` stays as `https://your-project.pages.dev`.
-- Session cookies flow correctly because the browser sees a single `pages.dev` origin.
+**Environment variable required at runtime (Cloudflare Pages):**
 
-> **Note:** This approach requires that the `functions/` directory is part of
-> the build output Cloudflare Pages deploys. Cloudflare Pages automatically
-> picks up `functions/` at the project root.
+| Variable | Value |
+|---|---|
+| `BACKEND_URL` | `https://sakhisetu-api.onrender.com` *(no trailing slash)* |
+
+**What is proxied:**
+All requests to `/api/*` — authentication (`/api/auth/*`), donations
+(`/api/donations/*`), receipts (`/api/receipts/*`), schemes (`/api/schemes/*`),
+eligibility (`/api/eligibility`), admin routes (`/api/admin/*`), health check
+(`/api/health`).
+
+**Security properties:**
+- The browser never sends cookies to Render directly — it only sends them to
+  the Cloudflare Pages origin, which is the Worker's own domain. The Worker then
+  forwards them as a server-side fetch to Render. This is safe because the Worker
+  runs in Cloudflare's infrastructure, not in the user's browser.
+- Hop-by-hop headers (`host`, `connection`, `transfer-encoding`, etc.) are
+  stripped before the upstream fetch to avoid HTTP/1.1 protocol errors.
+- `redirect: "manual"` prevents the Worker from silently following redirects
+  that should be surfaced to the browser.
 
 ---
 
@@ -546,14 +560,21 @@ ADMIN_EMAIL=admin@yourdomain.org
 ADMIN_PASSWORD=<strong password ≥ 12 chars>
 ```
 
-### Frontend (Cloudflare Pages environment variables — build-time)
+### Frontend (Cloudflare Pages environment variables)
 
+Build-time variables (Vite inlines these into the client bundle):
 ```
 VITE_API_BASE_URL=/api
 ```
 
-*(Use `/api` if deploying the API proxy in Appendix A, or the full Render URL
-`https://sakhisetu-api.onrender.com/api` if serving without a proxy.)*
+Runtime variables (read by the Cloudflare Worker at request time):
+```
+BACKEND_URL=https://sakhisetu-api.onrender.com
+```
+
+Both must be set in **Cloudflare Pages → Settings → Environment variables**.
+`VITE_API_BASE_URL` requires a new build after changing; `BACKEND_URL` takes
+effect immediately (no rebuild needed) because it is read at runtime.
 
 ---
 
@@ -565,9 +586,8 @@ VITE_API_BASE_URL=/api
 - **PDF receipts are preview/demo documents.** They are marked TEST and cannot
   be used for tax claims. Real 80G certificate issuance requires verified trust
   legal identity and an accountant/legal review.
-- **All 578 imported MP government schemes are drafts** (`published: false`).
-  Only SCH-022 and SCH-031 are published. An admin must publish schemes before
-  they appear in public eligibility results.
+- **All imported MP government schemes** — 22 are published and verified; 556 remain as drafts requiring admin review before publishing.
+  Only published schemes appear in public eligibility results.
 - **Gemini AI features** are inactive without a valid `GEMINI_API_KEY`.
 - **Before public launch:** complete DPDP Act 2023 compliance (notice/consent,
   retention, data-subject requests, processor contracts, incident response, and
