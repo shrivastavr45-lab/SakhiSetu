@@ -177,58 +177,13 @@ function Finder() {
       )}
 
       {done && (
-        <div>
-          <p className="text-primary font-semibold">{t({ hi: "बहुत बढ़िया! 🎉", en: "Well done! 🎉" })}</p>
-          <h1 className="text-3xl md:text-4xl mt-1">
-            {results.length > 0
-              ? `${results.length} ${t({ hi: "योजनाएँ आपके काम की हो सकती हैं", en: "schemes may be relevant for you" })}`
-              : t({ hi: "कोई संभावित योजना नहीं मिली", en: "No possible matches found" })}
-          </h1>
-          <p className="text-muted-foreground mt-2">{t({ hi: "यह नियमों पर आधारित संभावित मिलान है। अंतिम पात्रता सरकारी विभाग तय करेगा।", en: "These are possible matches based on published rules. The government department decides final eligibility." })}</p>
-          {loadingResults && <p role="status" className="mt-5 text-muted-foreground">{t({ hi: "आपके जवाब जाँचे जा रहे हैं…", en: "Checking your answers…" })}</p>}
-          {resultError && <p role="alert" className="mt-5 rounded-xl bg-destructive/10 text-destructive p-4">{resultError}</p>}
-          {!loadingResults && !resultError && (
-            <div className="mt-6 grid gap-5 sm:grid-cols-2">
-              {results.map((s) => (
-                <div key={s.id}>
-                  <SchemeCard s={s} />
-                  {s.match?.rulesApplied.length ? (
-                    <p className="mt-2 text-xs text-muted-foreground">
-                      {t({ hi: "मिलाए गए नियम: ", en: "Rules matched: " })}{describeRules(s.match.rulesApplied, t)}
-                    </p>
-                  ) : null}
-                  {s.match?.unansweredRules.length ? (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {t({ hi: "इन बातों की पुष्टि बाकी है: ", en: "Still to confirm: " })}{describeRules(s.match.unansweredRules, t)}
-                    </p>
-                  ) : null}
-                  {s.match?.hasStructuredRules === false && (
-                    <p className="mt-1 text-xs text-muted-foreground italic">
-                      {t({ hi: "इस योजना के लिए संरचित पात्रता नियम अभी उपलब्ध नहीं हैं। आधिकारिक स्रोत से जाँचें।", en: "No structured eligibility rules are available for this scheme. Check the official source." })}
-                    </p>
-                  )}
-                </div>
-              ))}
-              {results.length === 0 && (
-                <div className="col-span-full space-y-3">
-                  <p className="text-muted-foreground">
-                    {t({ hi: "दिए गए जवाबों से कोई संभावित योजना नहीं मिली।", en: "No possible matches were found for these answers." })}
-                  </p>
-                  <div className="rounded-xl bg-muted/60 p-4 text-sm space-y-1">
-                    <p className="font-semibold">{t({ hi: "सहायता के लिए:", en: "For help:" })}</p>
-                    <p>{t({ hi: "• मध्य प्रदेश CM हेल्पलाइन: 181 (निःशुल्क)", en: "• Madhya Pradesh CM Helpline: 181 (toll-free)" })}</p>
-                    <p>{t({ hi: "• अपने ज़िले के ट्रस्ट सहायता केंद्र से संपर्क करें।", en: "• Contact a trust help centre in your district." })}</p>
-                    <p className="text-xs text-muted-foreground">{t({ hi: "या नीचे 'सभी योजनाएँ' देखें।", en: "Or browse all schemes below." })}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          <div className="mt-8 flex flex-wrap gap-3">
-            <button onClick={() => { setStep(0); setProfile({}); setResults([]); setResultError(null); setAnswer(null); }} className="btn-big border bg-card"><RotateCcw className="size-5" /> {t({ hi: "फिर से शुरू करें", en: "Start again" })}</button>
-            <Link to="/schemes" className="btn-big bg-ink text-ink-foreground">{t({ hi: "सभी योजनाएँ", en: "All schemes" })}</Link>
-          </div>
-        </div>
+        <FinderResults
+          results={results}
+          loading={loadingResults}
+          error={resultError}
+          t={t}
+          onRestart={() => { setStep(0); setProfile({}); setResults([]); setResultError(null); setAnswer(null); }}
+        />
       )}
 
       <section className="mt-10 card-soft p-5 md:p-6" aria-labelledby="scheme-question-title">
@@ -270,5 +225,143 @@ function Choice({ icon, label, onClick, muted }: { icon: string; label: string; 
       <span className="text-3xl" aria-hidden>{icon}</span>
       {label}
     </button>
+  );
+}
+
+// ── FinderResults ────────────────────────────────────────────────────────────
+// Separates results into two tiers:
+//   1. Rule-verified — schemes with structured rules where at least one rule matched.
+//   2. Also check — schemes without structured rules (hasStructuredRules===false);
+//      they appear as possible matches but cannot be machine-verified.
+
+type FinderResultsProps = {
+  results: Scheme[];
+  loading: boolean;
+  error: string | null;
+  t: (s: L) => string;
+  onRestart: () => void;
+};
+
+function SchemeResult({ s, t }: { s: Scheme; t: (value: L) => string }) {
+  return (
+    <div>
+      <SchemeCard s={s} />
+      {s.match?.rulesApplied.length ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          ✓ {t({ hi: "मिले नियम: ", en: "Rules matched: " })}
+          {describeRules(s.match.rulesApplied, t)}
+        </p>
+      ) : null}
+      {s.match?.unansweredRules.length ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          ? {t({ hi: "पुष्टि बाकी: ", en: "Still to confirm: " })}
+          {describeRules(s.match.unansweredRules, t)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function FinderResults({ results, loading, error, t, onRestart }: FinderResultsProps) {
+  const verified  = results.filter((s) => s.match?.hasStructuredRules === true);
+  const unverified = results.filter((s) => s.match?.hasStructuredRules !== true);
+
+  return (
+    <div>
+      <p className="text-primary font-semibold">{t({ hi: "बहुत बढ़िया! 🎉", en: "Well done! 🎉" })}</p>
+
+      {/* Heading: count only the rule-verified matches prominently */}
+      <h1 className="text-3xl md:text-4xl mt-1">
+        {loading
+          ? t({ hi: "जाँच की जा रही है…", en: "Checking…" })
+          : verified.length > 0
+            ? `${verified.length} ${t({ hi: "योजनाएँ आपके नियमों से मेल खाती हैं", en: "schemes matched your answers" })}`
+            : results.length > 0
+              ? t({ hi: "कोई नियम-आधारित मेल नहीं मिला", en: "No rule-based matches found" })
+              : t({ hi: "कोई संभावित योजना नहीं मिली", en: "No possible matches found" })}
+      </h1>
+      <p className="text-muted-foreground mt-2 text-sm">
+        {t({ hi: "यह संभावित मिलान है — अंतिम पात्रता सरकारी विभाग तय करता है।", en: "These are possible matches only — the government department decides final eligibility." })}
+      </p>
+
+      {loading && (
+        <p role="status" className="mt-5 text-muted-foreground">
+          {t({ hi: "आपके जवाब जाँचे जा रहे हैं…", en: "Checking your answers…" })}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="mt-5 rounded-xl bg-destructive/10 text-destructive p-4">{error}</p>
+      )}
+
+      {!loading && !error && (
+        <>
+          {/* ── Tier 1: rule-verified matches ─────────────────────────── */}
+          {verified.length > 0 && (
+            <section className="mt-6" aria-labelledby="verified-heading">
+              <h2 id="verified-heading" className="text-lg font-semibold flex items-center gap-2">
+                <span className="inline-block size-2.5 rounded-full bg-leaf shrink-0" aria-hidden />
+                {t({ hi: "नियम-सत्यापित संभावित मेल", en: "Rule-verified possible matches" })}
+              </h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                {t({ hi: "इन योजनाओं के लिए आपके जवाब पात्रता नियमों से मेल खाते हैं।", en: "Your answers match the eligibility rules encoded for these schemes." })}
+              </p>
+              <div className="mt-4 grid gap-5 sm:grid-cols-2">
+                {verified.map((s) => <SchemeResult key={s.id} s={s} t={t} />)}
+              </div>
+            </section>
+          )}
+
+          {/* ── Tier 2: unverified / no structured rules ──────────────── */}
+          {unverified.length > 0 && (
+            <section className="mt-8" aria-labelledby="unverified-heading">
+              <h2 id="unverified-heading" className="text-lg font-semibold flex items-center gap-2">
+                <span className="inline-block size-2.5 rounded-full bg-muted-foreground/50 shrink-0" aria-hidden />
+                {t({ hi: "भी देखें — पात्रता नियम अभी उपलब्ध नहीं", en: "Also check — eligibility rules not yet available" })}
+              </h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                {t({
+                  hi: "इन योजनाओं के लिए हमारे पास अभी संरचित पात्रता नियम नहीं हैं। ये आपकी ज़रूरत के लिए प्रासंगिक हो सकती हैं — आधिकारिक स्रोत या ट्रस्ट सहायता केंद्र से पुष्टि करें।",
+                  en: "We don't yet have structured eligibility rules for these schemes. They may still be relevant — verify with the official source or a trust help centre.",
+                })}
+              </p>
+              <div className="mt-4 grid gap-5 sm:grid-cols-2">
+                {unverified.map((s) => (
+                  <div key={s.id} className="opacity-85">
+                    <SchemeCard s={s} />
+                    <p className="mt-1.5 text-xs text-muted-foreground italic">
+                      {t({ hi: "आधिकारिक स्रोत से पात्रता की पुष्टि करें।", en: "Confirm eligibility from the official source." })}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* ── Zero results ──────────────────────────────────────────── */}
+          {results.length === 0 && (
+            <div className="mt-6 col-span-full space-y-3">
+              <p className="text-muted-foreground">
+                {t({ hi: "दिए गए जवाबों से कोई संभावित योजना नहीं मिली।", en: "No possible matches were found for these answers." })}
+              </p>
+              <div className="rounded-xl bg-muted/60 p-4 text-sm space-y-1">
+                <p className="font-semibold">{t({ hi: "सहायता के लिए:", en: "For help:" })}</p>
+                <p>{t({ hi: "• मध्य प्रदेश CM हेल्पलाइन: 181 (निःशुल्क)", en: "• Madhya Pradesh CM Helpline: 181 (toll-free)" })}</p>
+                <p>{t({ hi: "• अपने ज़िले के ट्रस्ट सहायता केंद्र से संपर्क करें।", en: "• Contact a trust help centre in your district." })}</p>
+                <p className="text-xs text-muted-foreground">{t({ hi: "या नीचे 'सभी योजनाएँ' देखें।", en: "Or browse all schemes below." })}</p>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="mt-8 flex flex-wrap gap-3">
+        <button onClick={onRestart} className="btn-big border bg-card">
+          <RotateCcw className="size-5" /> {t({ hi: "फिर से शुरू करें", en: "Start again" })}
+        </button>
+        <Link to="/schemes" className="btn-big bg-ink text-ink-foreground">
+          {t({ hi: "सभी योजनाएँ", en: "All schemes" })}
+        </Link>
+      </div>
+    </div>
   );
 }
