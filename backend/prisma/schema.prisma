@@ -1,5 +1,10 @@
 generator client {
   provider = "prisma-client-js"
+  // Generate to the root node_modules so that TypeScript resolves @prisma/client
+  // correctly when tsc is invoked from the project root (as on Render).
+  // Path is relative to this schema file (backend/prisma/schema.prisma):
+  //   ../../ → project root
+  output   = "../../node_modules/.prisma/client"
 }
 
 datasource db {
