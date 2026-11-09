@@ -272,11 +272,8 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
       expect(body).toEqual({ data: { status: "ok" } });
     });
 
-    it("returns 502 with UPSTREAM_UNREACHABLE on network error", async () => {
-      // proxyToBackend retries GET once on network errors, so we mock two rejections.
-      vi.spyOn(globalThis, "fetch")
-        .mockRejectedValueOnce(new Error("Connection refused"))
-        .mockRejectedValueOnce(new Error("Connection refused"));
+    it("returns 502 with UPSTREAM_UNREACHABLE on network error immediately without compounding wait", async () => {
+      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("Connection refused"));
 
       const req = new Request("https://sakhisetu.test/api/health");
       const res = await proxyToBackend(req, { BACKEND_URL: "https://down-service.example.com" });
@@ -285,6 +282,52 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
       const json = await res.json();
       expect(json.error?.code).toBe("UPSTREAM_UNREACHABLE");
       expect(json.error?.message).toContain("Connection refused");
+    });
+
+    it("retries idempotent GET once on transient 502 and recovers when second attempt succeeds", async () => {
+      let attempts = 0;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        attempts++;
+        if (attempts === 1) {
+          return new Response(JSON.stringify({ error: { message: "Bad Gateway" } }), {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ data: { status: "ok" } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+      const req = new Request("https://sakhisetu.test/api/health");
+      const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+      expect(res.status).toBe(200);
+      expect(attempts).toBe(2);
+      const json = await res.json();
+      expect(json).toEqual({ data: { status: "ok" } });
+    });
+
+    it("does not retry POST requests on upstream 502", async () => {
+      let attempts = 0;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        attempts++;
+        return new Response(JSON.stringify({ error: { message: "Bad Gateway" } }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+      const req = new Request("https://sakhisetu.test/api/donations", {
+        method: "POST",
+        body: JSON.stringify({ amount: 100 }),
+        headers: { "Content-Type": "application/json" },
+      });
+      const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+      expect(res.status).toBe(502);
+      expect(attempts).toBe(1); // Exactly 1 attempt, zero retries
     });
   });
 

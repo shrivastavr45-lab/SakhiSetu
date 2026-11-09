@@ -216,8 +216,8 @@ export async function proxyToBackend(request: Request, env?: WorkerEnv): Promise
   const hasBody = method !== "GET" && method !== "HEAD";
   const isIdempotent = method === "GET" || method === "HEAD";
 
-  // Bound upstream subrequest timeout to 25s
-  const UPSTREAM_TIMEOUT_MS = 25_000;
+  // Bound upstream subrequest timeout to 15s (ensures proxy aborts and returns 502 before browser client's 20s timeout)
+  const UPSTREAM_TIMEOUT_MS = 15_000;
   // Proxy-level retry: for idempotent GET/HEAD requests, perform at most 1 quick retry on 502/503/504
   const maxAttempts = isIdempotent ? 2 : 1;
 
@@ -267,9 +267,9 @@ export async function proxyToBackend(request: Request, env?: WorkerEnv): Promise
       lastError = error;
       lastResponse = undefined;
 
-      if (attempt < maxAttempts - 1) {
-        continue;
-      }
+      // Do not retry inside proxy on network errors or upstream timeouts to avoid compounding
+      // user wait times; return 502 immediately so browser client handles backoff and starting UI
+      break;
     } finally {
       clearTimeout(timer);
     }

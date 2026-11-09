@@ -278,6 +278,78 @@ describe("request() — retry behaviour", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect(calls).toBe(1);
   });
+
+  it("defaults to 2 retries (3 attempts total) on GET requests", async () => {
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls++;
+      return makeJsonResponse(502, {
+        error: {
+          code: "UPSTREAM_UNREACHABLE",
+          message: "Could not reach the SakhiSetu API: Upstream request timed out after 15000ms",
+        },
+      });
+    }) as typeof fetch;
+
+    const errorPromise = request<unknown>("/schemes", {
+      retryDelayMs: 10,
+      // no retries option specified -> defaults to 2 retries for GET
+    }).catch((err: unknown) => err);
+
+    await vi.runAllTimersAsync();
+    const err = await errorPromise;
+
+    expect(err).toBeInstanceOf(ApiError);
+    // Should have called fetch exactly 3 times (1 initial attempt + 2 retries)
+    expect(calls).toBe(3);
+  });
+
+  it("handles upstream timeout 502 with clean retry recovery on attempt 2", async () => {
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls++;
+      if (calls === 1) {
+        return makeJsonResponse(502, {
+          error: {
+            code: "UPSTREAM_UNREACHABLE",
+            message: "Could not reach the SakhiSetu API: Upstream request timed out after 15000ms",
+          },
+        });
+      }
+      return makeOkEnvelope({ status: "recovered" });
+    }) as typeof fetch;
+
+    const promise = request<{ status: string }>("/schemes", { retryDelayMs: 10 });
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(calls).toBe(2);
+    expect(result).toEqual({ status: "recovered" });
+  });
+
+  it("aborts when client request exceeds timeoutMs", async () => {
+    // Mock a fetch that never resolves within timeoutMs
+    globalThis.fetch = vi.fn((_url, init) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | null;
+        signal?.addEventListener("abort", () => {
+          reject(signal.reason ?? new Error("Aborted"));
+        });
+      });
+    }) as typeof fetch;
+
+    const errorPromise = request<unknown>("/slow-endpoint", {
+      timeoutMs: 50,
+      retries: 0,
+    }).catch((err: unknown) => err);
+
+    await vi.advanceTimersByTimeAsync(100);
+    const err = await errorPromise;
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(502);
+    expect((err as ApiError).code).toBe("UPSTREAM_UNREACHABLE");
+  });
 });
 
 // ── 6. createDonation() — never retries ─────────────────────────────────────

@@ -143,12 +143,12 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     if (customRetries !== undefined) {
       maxRetries = Math.max(0, customRetries);
     } else if (isIdempotent) {
-      maxRetries = 3; // 1 initial attempt + up to 3 retries = 4 total attempts
+      maxRetries = 2; // 1 initial attempt + up to 2 retries = 3 total attempts
     }
   }
 
   const baseDelayMs = customBaseDelay ?? 1200;
-  const timeoutMs = customTimeout ?? 15_000;
+  const timeoutMs = customTimeout ?? 20_000; // 20s per-attempt timeout (exceeds proxy's 15s timeout)
 
   let requestTrackedAsStarting = false;
 
