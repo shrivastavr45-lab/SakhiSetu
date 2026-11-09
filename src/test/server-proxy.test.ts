@@ -4,6 +4,10 @@ import serverDefault, {
   proxyToBackend,
   resolveWorkerContext,
   resolveWorkerEnv,
+  PROXY_TOTAL_BUDGET_MS,
+  UPSTREAM_TIMEOUT_MS,
+  RETRY_DELAY_MS,
+  MIN_ATTEMPT_BUDGET_MS,
   type WorkerEnv,
 } from "../server";
 import entryCloudflareDefault from "../entry.cloudflare";
@@ -328,6 +332,311 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
 
       expect(res.status).toBe(502);
       expect(attempts).toBe(1); // Exactly 1 attempt, zero retries
+    });
+
+    describe("Cumulative timeout budget and retry boundaries", () => {
+      // 1. Immediate 502 followed by successful 200
+      it("1. immediate 502 followed by successful 200 recovers cleanly", async () => {
+        let attempts = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts++;
+          if (attempts === 1) {
+            return new Response(JSON.stringify({ error: { message: "Fast 502" } }), {
+              status: 502,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return new Response(JSON.stringify({ data: { status: "ok" } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        });
+
+        const req = new Request("https://sakhisetu.test/api/schemes");
+        const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+        expect(res.status).toBe(200);
+        expect(attempts).toBe(2);
+        expect(await res.json()).toEqual({ data: { status: "ok" } });
+      });
+
+      // 2. Delayed 502 that must not trigger another attempt
+      it("2. delayed 502 consuming budget does not trigger another attempt", async () => {
+        let simulatedTime = 100_000;
+        vi.spyOn(Date, "now").mockImplementation(() => simulatedTime);
+
+        let attempts = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts++;
+          // Simulate upstream taking 15,000ms before returning 502
+          simulatedTime += 15_000;
+          return new Response(
+            JSON.stringify({ error: { code: "DELAYED_502", message: "Render 502 after 15s" } }),
+            {
+              status: 502,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
+        });
+
+        const req = new Request("https://sakhisetu.test/api/schemes");
+        const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+        expect(res.status).toBe(502);
+        expect(attempts).toBe(1); // exactly 1 attempt! No retry triggered
+        const json = await res.json();
+        expect(json.error?.code).toBe("DELAYED_502");
+      });
+
+      // 3. Delayed 503 and 504 behavior
+      it("3. delayed 503 and 504 responses do not trigger another attempt when budget is depleted", async () => {
+        let simulatedTime = 200_000;
+        const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => simulatedTime);
+
+        let attempts503 = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts503++;
+          simulatedTime += 15_500;
+          return new Response(JSON.stringify({ error: { message: "Service Unavailable" } }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          });
+        });
+
+        const req503 = new Request("https://sakhisetu.test/api/schemes");
+        const res503 = await proxyToBackend(req503, { BACKEND_URL: "https://backend.example.com" });
+        expect(res503.status).toBe(503);
+        expect(attempts503).toBe(1);
+
+        simulatedTime = 300_000;
+        let attempts504 = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts504++;
+          simulatedTime += 15_500;
+          return new Response(JSON.stringify({ error: { message: "Gateway Timeout" } }), {
+            status: 504,
+            headers: { "Content-Type": "application/json" },
+          });
+        });
+
+        const req504 = new Request("https://sakhisetu.test/api/schemes");
+        const res504 = await proxyToBackend(req504, { BACKEND_URL: "https://backend.example.com" });
+        expect(res504.status).toBe(504);
+        expect(attempts504).toBe(1);
+
+        dateSpy.mockRestore();
+      });
+
+      // 4. First attempt consuming most of the cumulative budget bounds attempt 2 timeout
+      it("4. first attempt consuming most of the cumulative budget bounds attempt 2 timeout", async () => {
+        let simulatedTime = 400_000;
+        vi.spyOn(Date, "now").mockImplementation(() => simulatedTime);
+
+        let capturedTimeout: number | undefined;
+        const originalSetTimeout = globalThis.setTimeout;
+        vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, delay?: number) => {
+          if (delay === RETRY_DELAY_MS) {
+            simulatedTime += RETRY_DELAY_MS;
+          } else if (delay !== undefined) {
+            capturedTimeout = delay;
+          }
+          return originalSetTimeout(fn, 0);
+        }) as typeof setTimeout);
+
+        let attempts = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts++;
+          if (attempts === 1) {
+            simulatedTime += 11_000; // consumes 11,000ms out of 18,000ms
+            return new Response(JSON.stringify({ error: { message: "Slow 502" } }), {
+              status: 502,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          return new Response(JSON.stringify({ data: { status: "ok" } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        });
+
+        const req = new Request("https://sakhisetu.test/api/schemes");
+        const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+        expect(res.status).toBe(200);
+        expect(attempts).toBe(2);
+        // Attempt 2 timeout should be bounded by remaining budget: 18_000 - 11_000 - 800 = 6_200ms (< 12_000ms)
+        expect(capturedTimeout).toBeLessThanOrEqual(6_200);
+        expect(capturedTimeout).toBeGreaterThan(0);
+      });
+
+      // 5. Insufficient budget preventing another retry
+      it("5. insufficient remaining budget prevents another retry", async () => {
+        let simulatedTime = 500_000;
+        vi.spyOn(Date, "now").mockImplementation(() => simulatedTime);
+
+        let attempts = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts++;
+          // Takes 15,200ms -> remaining budget is 2,800ms <= RETRY_DELAY_MS (800) + MIN_ATTEMPT_BUDGET_MS (2500)
+          simulatedTime += 15_200;
+          return new Response(JSON.stringify({ error: { message: "Near-deadline 502" } }), {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          });
+        });
+
+        const req = new Request("https://sakhisetu.test/api/schemes");
+        const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+        expect(res.status).toBe(502);
+        expect(attempts).toBe(1);
+      });
+
+      // 6. Total proxy execution remaining within its 18-second budget
+      it("6. total proxy execution remains within 18-second budget", async () => {
+        let simulatedTime = 600_000;
+        const startTime = simulatedTime;
+        vi.spyOn(Date, "now").mockImplementation(() => simulatedTime);
+
+        let attempts = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts++;
+          if (attempts === 1) {
+            simulatedTime += 10_000; // 10s on attempt 1
+            return new Response(JSON.stringify({ error: { message: "502" } }), {
+              status: 502,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          simulatedTime += 7_000;
+          return new Response(JSON.stringify({ data: { status: "recovered" } }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        });
+
+        const req = new Request("https://sakhisetu.test/api/schemes");
+        const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+        expect(res.status).toBe(200);
+        const totalElapsed = simulatedTime - startTime;
+        expect(totalElapsed).toBeLessThanOrEqual(PROXY_TOTAL_BUDGET_MS);
+      });
+
+      // 7. Network timeout terminating proxy-level retries
+      it("7. network timeout terminates proxy-level retries immediately", async () => {
+        let attempts = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts++;
+          throw new Error("Upstream request timed out after 12000ms");
+        });
+
+        const req = new Request("https://sakhisetu.test/api/health");
+        const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+        expect(res.status).toBe(502);
+        expect(attempts).toBe(1);
+        const json = await res.json();
+        expect(json.error?.code).toBe("UPSTREAM_UNREACHABLE");
+        expect(json.error?.message).toContain("Upstream request timed out");
+      });
+
+      // 8. POST /donations never being retried
+      it("8. POST /donations is never retried even when budget is plentiful", async () => {
+        let attempts = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attempts++;
+          return new Response(JSON.stringify({ error: { message: "Render starting" } }), {
+            status: 502,
+            headers: { "Content-Type": "application/json" },
+          });
+        });
+
+        const req = new Request("https://sakhisetu.test/api/donations", {
+          method: "POST",
+          body: JSON.stringify({ amount: 500 }),
+          headers: { "Content-Type": "application/json" },
+        });
+        const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+        expect(res.status).toBe(502);
+        expect(attempts).toBe(1);
+      });
+
+      // 9. Timer cleanup after success, retry and failure
+      it("9. timer cleanup executes correctly after success, retry and failure", async () => {
+        const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+
+        // Scenario A: Success on first attempt
+        vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+          new Response(JSON.stringify({ data: { status: "ok" } }), { status: 200 }),
+        );
+        const resA = await proxyToBackend(new Request("https://sakhisetu.test/api/health"), {
+          BACKEND_URL: "https://backend.example.com",
+        });
+        expect(resA.status).toBe(200);
+        expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+
+        clearTimeoutSpy.mockClear();
+
+        // Scenario B: Success after 1 retry
+        let attemptCount = 0;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          attemptCount++;
+          if (attemptCount === 1)
+            return new Response(JSON.stringify({ error: "502" }), { status: 502 });
+          return new Response(JSON.stringify({ data: "ok" }), { status: 200 });
+        });
+        const resB = await proxyToBackend(new Request("https://sakhisetu.test/api/health"), {
+          BACKEND_URL: "https://backend.example.com",
+        });
+        expect(resB.status).toBe(200);
+        expect(clearTimeoutSpy).toHaveBeenCalledTimes(2);
+
+        clearTimeoutSpy.mockClear();
+
+        // Scenario C: Network error failure
+        vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("Connection failed"));
+        const resC = await proxyToBackend(new Request("https://sakhisetu.test/api/health"), {
+          BACKEND_URL: "https://backend.example.com",
+        });
+        expect(resC.status).toBe(502);
+        expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+      });
+
+      // 10. Preservation of the last upstream HTTP response
+      it("10. preserves the last upstream HTTP response body and status code when breaking", async () => {
+        let simulatedTime = 700_000;
+        vi.spyOn(Date, "now").mockImplementation(() => simulatedTime);
+
+        vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+          simulatedTime += 15_000; // exhausts budget
+          return new Response(
+            JSON.stringify({
+              customError: "Render container memory exceeded",
+              code: "OUT_OF_MEMORY",
+            }),
+            {
+              status: 502,
+              headers: {
+                "Content-Type": "application/json",
+                "X-Custom-Render-Header": "edge-proxy-1",
+              },
+            },
+          );
+        });
+
+        const req = new Request("https://sakhisetu.test/api/schemes");
+        const res = await proxyToBackend(req, { BACKEND_URL: "https://backend.example.com" });
+
+        expect(res.status).toBe(502);
+        expect(res.headers.get("x-custom-render-header")).toBe("edge-proxy-1");
+        const json = await res.json();
+        expect(json).toEqual({
+          customError: "Render container memory exceeded",
+          code: "OUT_OF_MEMORY",
+        });
+      });
     });
   });
 

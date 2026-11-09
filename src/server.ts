@@ -174,6 +174,12 @@ export async function resolveWorkerContext(
   return undefined;
 }
 
+// Upstream proxy timeout budget constants
+export const PROXY_TOTAL_BUDGET_MS = 18_000;
+export const UPSTREAM_TIMEOUT_MS = 12_000;
+export const RETRY_DELAY_MS = 800;
+export const MIN_ATTEMPT_BUDGET_MS = 2_500;
+
 /**
  * Proxy an /api/* request to the Render backend.
  *
@@ -181,6 +187,7 @@ export async function resolveWorkerContext(
  * - Returns the upstream response (including Set-Cookie) unchanged so that
  *   session cookies set by the Render API arrive at the browser correctly.
  * - GET/HEAD requests are forwarded without a body.
+ * - Cumulative proxy timeout budget ensures total wait never exceeds PROXY_TOTAL_BUDGET_MS.
  */
 export async function proxyToBackend(request: Request, env?: WorkerEnv): Promise<Response> {
   const resolvedEnv = extractBackendUrl(env)
@@ -216,24 +223,40 @@ export async function proxyToBackend(request: Request, env?: WorkerEnv): Promise
   const hasBody = method !== "GET" && method !== "HEAD";
   const isIdempotent = method === "GET" || method === "HEAD";
 
-  // Bound upstream subrequest timeout to 15s (ensures proxy aborts and returns 502 before browser client's 20s timeout)
-  const UPSTREAM_TIMEOUT_MS = 15_000;
-  // Proxy-level retry: for idempotent GET/HEAD requests, perform at most 1 quick retry on 502/503/504
+  const proxyStartTime = Date.now();
   const maxAttempts = isIdempotent ? 2 : 1;
 
   let lastResponse: Response | undefined;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // If this is a retry attempt, verify we have enough cumulative budget for delay + minimal attempt
     if (attempt > 0) {
-      // Brief pause between proxy-level attempts (absorbs momentary socket reset as container becomes hot)
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      const elapsedBeforeDelay = Date.now() - proxyStartTime;
+      const budgetBeforeDelay = PROXY_TOTAL_BUDGET_MS - elapsedBeforeDelay;
+
+      if (budgetBeforeDelay <= RETRY_DELAY_MS + MIN_ATTEMPT_BUDGET_MS) {
+        break; // Insufficient total budget remaining to pause and retry
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     }
+
+    const elapsed = Date.now() - proxyStartTime;
+    const remainingBudget = PROXY_TOTAL_BUDGET_MS - elapsed;
+
+    // If remaining cumulative budget cannot support a viable attempt, break
+    if (remainingBudget < MIN_ATTEMPT_BUDGET_MS) {
+      break;
+    }
+
+    // Attempt timeout is bounded by UPSTREAM_TIMEOUT_MS and remaining cumulative budget
+    const attemptTimeout = Math.min(UPSTREAM_TIMEOUT_MS, remainingBudget);
 
     const abortController = new AbortController();
     const timer = setTimeout(() => {
-      abortController.abort(new Error(`Upstream request timed out after ${UPSTREAM_TIMEOUT_MS}ms`));
-    }, UPSTREAM_TIMEOUT_MS);
+      abortController.abort(new Error(`Upstream request timed out after ${attemptTimeout}ms`));
+    }, attemptTimeout);
 
     try {
       const resp = await fetch(upstreamUrl.toString(), {
@@ -259,16 +282,22 @@ export async function proxyToBackend(request: Request, env?: WorkerEnv): Promise
         });
       }
 
-      // If it is transient (502/503/504) and we have attempts remaining, retry
+      // If transient status (502/503/504) and attempts remain, check if cumulative budget permits retry
       if (attempt < maxAttempts - 1) {
+        const postElapsed = Date.now() - proxyStartTime;
+        const postRemainingBudget = PROXY_TOTAL_BUDGET_MS - postElapsed;
+        if (postRemainingBudget <= RETRY_DELAY_MS + MIN_ATTEMPT_BUDGET_MS) {
+          // Insufficient budget remaining; preserve lastResponse and exit without retrying
+          break;
+        }
         continue;
       }
     } catch (error) {
       lastError = error;
       lastResponse = undefined;
 
-      // Do not retry inside proxy on network errors or upstream timeouts to avoid compounding
-      // user wait times; return 502 immediately so browser client handles backoff and starting UI
+      // Do not retry inside proxy on network errors or upstream timeouts to avoid compounding wait times;
+      // return 502 immediately so browser client handles backoff and starting UI
       break;
     } finally {
       clearTimeout(timer);
