@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { ArrowLeft, RotateCcw } from "lucide-react";
+import { ArrowLeft, RotateCcw, RotateCw } from "lucide-react";
 import { DISTRICTS, NEEDS, type Profile, type Scheme } from "@/lib/data";
 import { askAssistant, checkEligibility } from "@/lib/api";
 import { useLang, type L } from "@/lib/i18n";
@@ -129,6 +129,7 @@ function Finder() {
   const [results, setResults] = useState<Scheme[]>([]);
   const [loadingResults, setLoadingResults] = useState(false);
   const [resultError, setResultError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
@@ -138,6 +139,10 @@ function Finder() {
   const next = (p: Profile) => {
     setProfile(p);
     setStep((s) => s + 1);
+  };
+
+  const handleRetry = () => {
+    setRetryNonce((n) => n + 1);
   };
 
   useEffect(() => {
@@ -150,15 +155,7 @@ function Finder() {
         if (active) setResults(payload.results);
       })
       .catch((error: unknown) => {
-        if (active)
-          setResultError(
-            error instanceof Error
-              ? error.message
-              : t({
-                  hi: "योजना नियमों की जाँच नहीं की जा सकी।",
-                  en: "Could not check scheme rules.",
-                }),
-          );
+        if (active) setResultError(error instanceof Error ? error.message : "FAILED_TO_CHECK");
       })
       .finally(() => {
         if (active) setLoadingResults(false);
@@ -166,7 +163,7 @@ function Finder() {
     return () => {
       active = false;
     };
-  }, [done, profile, t]);
+  }, [done, profile, retryNonce]);
 
   const askQuestion = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -267,6 +264,7 @@ function Finder() {
           loading={loadingResults}
           error={resultError}
           t={t}
+          onRetry={handleRetry}
           onRestart={() => {
             setStep(0);
             setProfile({});
@@ -377,6 +375,7 @@ type FinderResultsProps = {
   error: string | null;
   t: (s: L) => string;
   onRestart: () => void;
+  onRetry: () => void;
 };
 
 function SchemeResult({ s, t }: { s: Scheme; t: (value: L) => string }) {
@@ -399,9 +398,44 @@ function SchemeResult({ s, t }: { s: Scheme; t: (value: L) => string }) {
   );
 }
 
-function FinderResults({ results, loading, error, t, onRestart }: FinderResultsProps) {
+function FinderResults({ results, loading, error, t, onRestart, onRetry }: FinderResultsProps) {
   const verified = results.filter((s) => s.match?.hasStructuredRules === true);
   const unverified = results.filter((s) => s.match?.hasStructuredRules !== true);
+
+  if (error) {
+    return (
+      <div>
+        <h1 className="text-3xl md:text-4xl mt-1 text-destructive">
+          {t({ hi: "योजनाओं की जाँच नहीं हो सकी", en: "Could not check schemes" })}
+        </h1>
+        <div role="alert" className="mt-5 rounded-xl bg-destructive/10 text-destructive p-4">
+          <p className="font-semibold">
+            {error === "FAILED_TO_CHECK"
+              ? t({
+                  hi: "योजना नियमों की जाँच नहीं की जा सकी।",
+                  en: "Could not check scheme rules.",
+                })
+              : error}
+          </p>
+        </div>
+        <div className="mt-8 flex flex-wrap gap-3">
+          <button
+            onClick={onRetry}
+            disabled={loading}
+            className="btn-big bg-primary text-primary-foreground disabled:opacity-60"
+          >
+            <RotateCw className="size-5" /> {t({ hi: "पुनः प्रयास करें", en: "Retry" })}
+          </button>
+          <button onClick={onRestart} className="btn-big border bg-card">
+            <RotateCcw className="size-5" /> {t({ hi: "फिर से शुरू करें", en: "Start again" })}
+          </button>
+          <Link to="/schemes" className="btn-big bg-ink text-ink-foreground">
+            {t({ hi: "सभी योजनाएँ", en: "All schemes" })}
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -431,13 +465,8 @@ function FinderResults({ results, loading, error, t, onRestart }: FinderResultsP
           {t({ hi: "आपके जवाब जाँचे जा रहे हैं…", en: "Checking your answers…" })}
         </p>
       )}
-      {error && (
-        <p role="alert" className="mt-5 rounded-xl bg-destructive/10 text-destructive p-4">
-          {error}
-        </p>
-      )}
 
-      {!loading && !error && (
+      {!loading && (
         <>
           {/* ── Tier 1: rule-verified matches ─────────────────────────── */}
           {verified.length > 0 && (

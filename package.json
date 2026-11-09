@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:backend": "dotenv -e backend/.env -- tsx watch backend/src/server.ts",
+    "dev:all": "node backend/scripts/dev-all.mjs",
     "build:backend": "tsc -p backend/tsconfig.json",
     "start:backend": "node backend/dist/server.js",
     "db:generate": "prisma generate --schema backend/prisma/schema.prisma",
