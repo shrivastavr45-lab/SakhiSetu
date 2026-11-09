@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { RotateCw } from "lucide-react";
 import { DISTRICTS, NEEDS, type Need, type Scheme } from "@/lib/data";
-import { getSchemes } from "@/lib/api";
+import { getSchemes, useServerStarting } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
 import { SchemeCard } from "@/components/SchemeCard";
 
@@ -38,6 +39,7 @@ export const Route = createFileRoute("/schemes/")({
 
 function SchemesPage() {
   const { t } = useLang();
+  const isServerStarting = useServerStarting();
   const { need } = Route.useSearch();
   const [district, setDistrict] = useState("");
   const [level, setLevel] = useState("");
@@ -48,6 +50,11 @@ function SchemesPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  const handleRetry = () => {
+    setRetryNonce((n) => n + 1);
+  };
 
   // Reset to first page whenever filters change
   useEffect(() => {
@@ -85,7 +92,7 @@ function SchemesPage() {
     return () => {
       active = false;
     };
-  }, [need, district, level, q, page, t]);
+  }, [need, district, level, q, page, retryNonce, t]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
@@ -161,25 +168,50 @@ function SchemesPage() {
         </label>
       </div>
 
-      {/* Result count */}
-      <p className="mt-6 text-sm text-muted-foreground" aria-live="polite">
-        {loading
-          ? t({ hi: "योजनाएँ खोजी जा रही हैं…", en: "Searching schemes…" })
-          : t({ hi: `${total} योजनाएँ मिलीं`, en: `${total} schemes found` })}
-        {!loading && totalPages > 1 && (
-          <span className="ml-2 text-xs">
-            {t({
-              hi: `(पृष्ठ ${page + 1} / ${totalPages})`,
-              en: `(page ${page + 1} of ${totalPages})`,
-            })}
-          </span>
+      {/* Result count / loading indicator */}
+      <div className="mt-6 text-sm text-muted-foreground flex items-center gap-2" aria-live="polite">
+        {loading ? (
+          <>
+            <RotateCw className="size-3.5 animate-spin text-primary shrink-0" />
+            <span>
+              {isServerStarting
+                ? t({
+                    hi: "सर्वर शुरू हो रहा है, कृपया प्रतीक्षा करें...",
+                    en: "Server is starting. Please wait...",
+                  })
+                : t({ hi: "योजनाएँ खोजी जा रही हैं…", en: "Searching schemes…" })}
+            </span>
+          </>
+        ) : (
+          <>
+            <span>{t({ hi: `${total} योजनाएँ मिलीं`, en: `${total} schemes found` })}</span>
+            {totalPages > 1 && (
+              <span className="text-xs">
+                {t({
+                  hi: `(पृष्ठ ${page + 1} / ${totalPages})`,
+                  en: `(page ${page + 1} of ${totalPages})`,
+                })}
+              </span>
+            )}
+          </>
         )}
-      </p>
+      </div>
 
       {error && (
-        <p role="alert" className="mt-3 rounded-xl bg-destructive/10 text-destructive p-4">
-          {error}
-        </p>
+        <div
+          role="alert"
+          className="mt-3 rounded-xl bg-destructive/10 text-destructive p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+        >
+          <p className="font-medium">{error}</p>
+          <button
+            onClick={handleRetry}
+            disabled={loading}
+            className="btn-big !min-h-10 text-sm bg-primary text-primary-foreground disabled:opacity-60 flex items-center gap-1.5 shrink-0"
+          >
+            <RotateCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
+            {t({ hi: "पुनः प्रयास करें", en: "Retry" })}
+          </button>
+        </div>
       )}
 
       {!loading && !error && (

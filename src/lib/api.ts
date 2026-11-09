@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { Campaign, Profile, Scheme } from "./data";
 import type { L } from "./i18n";
 
@@ -17,29 +18,244 @@ export class ApiError extends Error {
 
 type ApiEnvelope<T> = { data: T };
 
-type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
+export type RequestOptions = Omit<RequestInit, "body"> & {
+  body?: unknown;
+  retries?: number;
+  retryDelayMs?: number;
+  timeoutMs?: number;
+  onRetry?: (attempt: number, maxRetries: number, error: unknown) => void;
+};
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+// Global reactive server-starting state for Render cold starts
+let activeStartingRequests = 0;
+const serverStartingListeners = new Set<(isStarting: boolean) => void>();
+
+export function isServerStarting(): boolean {
+  return activeStartingRequests > 0;
+}
+
+export function subscribeServerStarting(listener: (isStarting: boolean) => void): () => void {
+  serverStartingListeners.add(listener);
+  return () => {
+    serverStartingListeners.delete(listener);
+  };
+}
+
+function notifyServerStarting(starting: boolean) {
+  for (const listener of serverStartingListeners) {
+    try {
+      listener(starting);
+    } catch {
+      // Ignore listener error
+    }
+  }
+}
+
+function incrementStarting() {
+  activeStartingRequests++;
+  if (activeStartingRequests === 1) {
+    notifyServerStarting(true);
+  }
+}
+
+function decrementStarting() {
+  if (activeStartingRequests > 0) {
+    activeStartingRequests--;
+    if (activeStartingRequests === 0) {
+      notifyServerStarting(false);
+    }
+  }
+}
+
+export function useServerStarting(): boolean {
+  const [starting, setStarting] = useState(isServerStarting);
+  useEffect(() => {
+    setStarting(isServerStarting());
+    return subscribeServerStarting(setStarting);
+  }, []);
+  return starting;
+}
+
+/** Check if HTTP status indicates a temporary upstream/gateway issue during cold starts */
+export function isTransientStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+/** Check if an error represents a temporary network or upstream availability failure */
+export function isTransientError(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    return isTransientStatus(error.status);
+  }
+  if (error instanceof Error) {
+    const name = error.name.toLowerCase();
+    const msg = error.message.toLowerCase();
+    return (
+      error instanceof TypeError ||
+      name === "aborterror" ||
+      name === "timeouterror" ||
+      msg.includes("fetch") ||
+      msg.includes("network") ||
+      msg.includes("upstream") ||
+      msg.includes("timeout") ||
+      msg.includes("econnrefused") ||
+      msg.includes("connection refused")
+    );
+  }
+  return false;
+}
+
+/** Calculate exponential backoff delay with bounded jitter */
+export function calculateBackoffDelay(
+  attempt: number,
+  baseDelayMs = 1200,
+  maxDelayMs = 8000,
+): number {
+  const exponential = baseDelayMs * Math.pow(2, attempt);
+  const jitter = Math.floor(Math.random() * 250);
+  return Math.min(maxDelayMs, exponential + jitter);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
-  const { body: _bodyRaw, ...restOptions } = options;
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...restOptions,
-    headers,
-    credentials: "include",
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-  });
+  const {
+    body: _bodyRaw,
+    retries: customRetries,
+    retryDelayMs: customBaseDelay,
+    timeoutMs: customTimeout,
+    onRetry,
+    signal: userSignal,
+    ...restOptions
+  } = options;
 
-  const contentType = response.headers.get("content-type") ?? "";
-  const payload = contentType.includes("application/json") ? await response.json() as unknown : null;
-  if (!response.ok) {
-    const error = payload && typeof payload === "object" && "error" in payload
-      ? (payload as { error?: { code?: string; message?: string } }).error
-      : undefined;
-    throw new ApiError(response.status, error?.code ?? "REQUEST_FAILED", error?.message ?? `Request failed (${response.status}).`);
+  const method = (options.method ?? "GET").toUpperCase();
+  const isIdempotent = method === "GET" || method === "HEAD";
+
+  // Safeguard: Never automatically retry donation creation or payment mutations
+  const isDonationOrPayment = path.startsWith("/donations") || path.includes("/donations");
+
+  let maxRetries = 0;
+  if (!isDonationOrPayment) {
+    if (customRetries !== undefined) {
+      maxRetries = Math.max(0, customRetries);
+    } else if (isIdempotent) {
+      maxRetries = 3; // 1 initial attempt + up to 3 retries = 4 total attempts
+    }
   }
-  if (payload && typeof payload === "object" && "data" in payload) return (payload as ApiEnvelope<T>).data;
-  return payload as T;
+
+  const baseDelayMs = customBaseDelay ?? 1200;
+  const timeoutMs = customTimeout ?? 15_000;
+
+  let requestTrackedAsStarting = false;
+
+  try {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      let abortController: AbortController | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let combinedSignal: AbortSignal | null = userSignal ?? null;
+
+      if (timeoutMs > 0) {
+        abortController = new AbortController();
+        timer = setTimeout(() => {
+          abortController?.abort(new Error(`Request timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        if (userSignal) {
+          if (userSignal.aborted) {
+            clearTimeout(timer);
+            throw userSignal.reason ?? new Error("Aborted");
+          }
+          userSignal.addEventListener("abort", () => {
+            abortController?.abort(userSignal!.reason);
+          });
+        }
+        combinedSignal = abortController.signal;
+      }
+
+      let response: Response | undefined;
+      let networkError: unknown;
+
+      try {
+        response = await fetch(`${API_BASE}${path}`, {
+          ...restOptions,
+          method,
+          headers,
+          credentials: "include",
+          signal: combinedSignal ?? null,
+          ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+        });
+      } catch (err) {
+        networkError = err;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+
+      // 1. If fetch threw a network/timeout error
+      if (!response) {
+        const transient = isTransientError(networkError);
+        if (transient && attempt < maxRetries) {
+          if (!requestTrackedAsStarting) {
+            requestTrackedAsStarting = true;
+            incrementStarting();
+          }
+          onRetry?.(attempt + 1, maxRetries, networkError);
+          const delay = calculateBackoffDelay(attempt, baseDelayMs);
+          await sleep(delay);
+          continue;
+        }
+
+        const msg = networkError instanceof Error ? networkError.message : "Network request failed";
+        throw new ApiError(502, "UPSTREAM_UNREACHABLE", `Request failed (502): ${msg}`);
+      }
+
+      // 2. If response has a transient HTTP status (502, 503, 504)
+      if (isTransientStatus(response.status) && attempt < maxRetries) {
+        if (!requestTrackedAsStarting) {
+          requestTrackedAsStarting = true;
+          incrementStarting();
+        }
+        onRetry?.(
+          attempt + 1,
+          maxRetries,
+          new ApiError(response.status, "TRANSIENT_HTTP_ERROR", `HTTP ${response.status}`),
+        );
+        const delay = calculateBackoffDelay(attempt, baseDelayMs);
+        await sleep(delay);
+        continue;
+      }
+
+      // 3. Response is returned (success or non-retryable error)
+      const contentType = response.headers.get("content-type") ?? "";
+      const payload = contentType.includes("application/json") ? ((await response.json()) as unknown) : null;
+
+      if (!response.ok) {
+        const error =
+          payload && typeof payload === "object" && "error" in payload
+            ? (payload as { error?: { code?: string; message?: string } }).error
+            : undefined;
+        throw new ApiError(
+          response.status,
+          error?.code ?? "REQUEST_FAILED",
+          error?.message ?? `Request failed (${response.status}).`,
+        );
+      }
+
+      if (payload && typeof payload === "object" && "data" in payload) {
+        return (payload as ApiEnvelope<T>).data;
+      }
+      return payload as T;
+    }
+
+    throw new ApiError(502, "RETRIES_EXHAUSTED", "Request failed (502).");
+  } finally {
+    if (requestTrackedAsStarting) {
+      decrementStarting();
+    }
+  }
 }
 
 export type SessionUser = { id: string; name: string; email: string; role: "DONOR" | "ADMIN" };
@@ -103,6 +319,9 @@ export type DonationResult = {
   receipt: { id: string; receiptNumber: string; downloadToken: string | null; downloadUrl: string; previewOnly: boolean } | null;
 };
 
+export const getHealth = () =>
+  request<{ status: string; database: string; paymentMode: string }>("/health");
+
 export function createDonation(
   body: { campaignId: string; amount: number; frequency: "ONE_TIME" | "MONTHLY"; donorName: string; donorEmail: string; pan: string },
   idempotencyKey: string,
@@ -110,6 +329,7 @@ export function createDonation(
 ) {
   return request<DonationResult>("/donations", {
     method: "POST",
+    retries: 0, // Strict safeguard: Never automatically retry donation creation
     headers: {
       "Idempotency-Key": idempotencyKey,
       ...(simulateFailure ? { "X-Test-Payment-Outcome": "failed" } : {}),

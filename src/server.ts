@@ -214,36 +214,85 @@ export async function proxyToBackend(request: Request, env?: WorkerEnv): Promise
 
   const method = request.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
+  const isIdempotent = method === "GET" || method === "HEAD";
 
-  let upstreamResponse: Response;
-  try {
-    upstreamResponse = await fetch(upstreamUrl.toString(), {
-      method,
-      headers: upstreamHeaders,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      body: hasBody ? (request.body as any) : undefined,
-      redirect: "manual",
-      // @ts-expect-error duplex is required in Node/standard fetch when body is a ReadableStream
-      duplex: hasBody && request.body ? "half" : undefined,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown upstream error";
-    return new Response(
-      JSON.stringify({
-        error: {
-          code: "UPSTREAM_UNREACHABLE",
-          message: `Could not reach the SakhiSetu API: ${message}`,
-        },
-      }),
-      { status: 502, headers: { "Content-Type": "application/json" } },
-    );
+  // Bound upstream subrequest timeout to 25s
+  const UPSTREAM_TIMEOUT_MS = 25_000;
+  // Proxy-level retry: for idempotent GET/HEAD requests, perform at most 1 quick retry on 502/503/504
+  const maxAttempts = isIdempotent ? 2 : 1;
+
+  let lastResponse: Response | undefined;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      // Brief pause between proxy-level attempts (absorbs momentary socket reset as container becomes hot)
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+
+    const abortController = new AbortController();
+    const timer = setTimeout(() => {
+      abortController.abort(new Error(`Upstream request timed out after ${UPSTREAM_TIMEOUT_MS}ms`));
+    }, UPSTREAM_TIMEOUT_MS);
+
+    try {
+      const resp = await fetch(upstreamUrl.toString(), {
+        method,
+        headers: upstreamHeaders,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        body: hasBody ? (request.body as any) : undefined,
+        redirect: "manual",
+        signal: abortController.signal,
+        // @ts-expect-error duplex is required in Node/standard fetch when body is a ReadableStream
+        duplex: hasBody && request.body ? "half" : undefined,
+      });
+
+      lastResponse = resp;
+      lastError = undefined;
+
+      // If response is not a transient gateway error (e.g. 200, 404, 400), return immediately
+      if (resp.status !== 502 && resp.status !== 503 && resp.status !== 504) {
+        return new Response(resp.body, {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: resp.headers,
+        });
+      }
+
+      // If it is transient (502/503/504) and we have attempts remaining, retry
+      if (attempt < maxAttempts - 1) {
+        continue;
+      }
+    } catch (error) {
+      lastError = error;
+      lastResponse = undefined;
+
+      if (attempt < maxAttempts - 1) {
+        continue;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status,
-    statusText: upstreamResponse.statusText,
-    headers: upstreamResponse.headers,
-  });
+  if (lastResponse) {
+    return new Response(lastResponse.body, {
+      status: lastResponse.status,
+      statusText: lastResponse.statusText,
+      headers: lastResponse.headers,
+    });
+  }
+
+  const message = lastError instanceof Error ? lastError.message : "Unknown upstream error";
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: "UPSTREAM_UNREACHABLE",
+        message: `Could not reach the SakhiSetu API: ${message}`,
+      },
+    }),
+    { status: 502, headers: { "Content-Type": "application/json" } },
+  );
 }
 
 let serverEntryPromise: Promise<ServerEntry> | undefined;

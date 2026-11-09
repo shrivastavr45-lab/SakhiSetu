@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Sparkles, HeartHandshake } from "lucide-react";
+import { Sparkles, HeartHandshake, RotateCw } from "lucide-react";
 import { NEEDS, STATS, inr, type Campaign, type Scheme } from "@/lib/data";
-import { getCampaigns, getHomepageBanner, getSchemes } from "@/lib/api";
+import { getCampaigns, getHomepageBanner, getSchemes, useServerStarting } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
 import { SchemeCard } from "@/components/SchemeCard";
 
@@ -27,14 +27,22 @@ export const Route = createFileRoute("/")({
 
 function Index() {
   const { t } = useLang();
+  const isServerStarting = useServerStarting();
   const [schemes, setSchemes] = useState<Scheme[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [banner, setBanner] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  const handleRetry = () => {
+    setRetryNonce((n) => n + 1);
+  };
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setLoadError(null);
     Promise.all([getSchemes(), getCampaigns(), getHomepageBanner()])
       .then(([schemeRows, campaignRows, setting]) => {
         if (!active) return;
@@ -56,7 +64,7 @@ function Index() {
     return () => {
       active = false;
     };
-  }, [t]);
+  }, [retryNonce, t]);
 
   return (
     <>
@@ -142,14 +150,33 @@ function Index() {
           </Link>
         </div>
         {loadError && (
-          <p role="alert" className="mt-4 rounded-xl bg-destructive/10 text-destructive p-4">
-            {loadError}
-          </p>
+          <div
+            role="alert"
+            className="mt-4 rounded-xl bg-destructive/10 text-destructive p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+          >
+            <p className="font-medium">{loadError}</p>
+            <button
+              onClick={handleRetry}
+              disabled={loading}
+              className="btn-big !min-h-10 text-sm bg-primary text-primary-foreground disabled:opacity-60 flex items-center gap-1.5 shrink-0"
+            >
+              <RotateCw className={`size-4 ${loading ? "animate-spin" : ""}`} />
+              {t({ hi: "पुनः प्रयास करें", en: "Retry" })}
+            </button>
+          </div>
         )}
         {loading ? (
-          <p className="mt-6 text-muted-foreground">
-            {t({ hi: "योजनाएँ लोड हो रही हैं…", en: "Loading schemes…" })}
-          </p>
+          <div className="mt-6 flex items-center gap-2 text-muted-foreground" aria-live="polite">
+            <RotateCw className="size-4 animate-spin text-primary shrink-0" />
+            <p>
+              {isServerStarting
+                ? t({
+                    hi: "सर्वर शुरू हो रहा है, कृपया प्रतीक्षा करें...",
+                    en: "Server is starting. Please wait...",
+                  })
+                : t({ hi: "योजनाएँ लोड हो रही हैं…", en: "Loading schemes…" })}
+            </p>
+          </div>
         ) : (
           <div className="mt-6 grid gap-5 md:grid-cols-3">
             {schemes.slice(0, 3).map((s) => (

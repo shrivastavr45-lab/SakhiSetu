@@ -1,8 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { CheckCircle2, FileText, Volume2, ArrowLeft } from "lucide-react";
+import { CheckCircle2, FileText, Volume2, ArrowLeft, RotateCw } from "lucide-react";
 import { districtName, type Scheme } from "@/lib/data";
-import { getScheme } from "@/lib/api";
+import { getScheme, useServerStarting } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
 
 export const Route = createFileRoute("/schemes/$id")({
@@ -15,12 +15,20 @@ export const Route = createFileRoute("/schemes/$id")({
 function SchemeDetail() {
   const { id } = Route.useParams();
   const { t, lang } = useLang();
+  const isServerStarting = useServerStarting();
   const [s, setScheme] = useState<Scheme | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  const handleRetry = () => {
+    setRetryNonce((n) => n + 1);
+  };
+
   useEffect(() => {
     let active = true;
     setLoading(true);
+    setError(null);
     getScheme(id)
       .then((scheme) => {
         if (active) setScheme(scheme);
@@ -39,20 +47,43 @@ function SchemeDetail() {
     return () => {
       active = false;
     };
-  }, [id, t]);
+  }, [id, t, retryNonce]);
 
   if (loading)
     return (
-      <div className="mx-auto max-w-3xl px-4 py-12 text-muted-foreground">
-        {t({ hi: "योजना विवरण लोड हो रहा है…", en: "Loading scheme details…" })}
+      <div className="mx-auto max-w-3xl px-4 py-12 flex items-center gap-2 text-muted-foreground" aria-live="polite">
+        <RotateCw className="size-4 animate-spin text-primary shrink-0" />
+        <p>
+          {isServerStarting
+            ? t({
+                hi: "सर्वर शुरू हो रहा है, कृपया प्रतीक्षा करें...",
+                en: "Server is starting. Please wait...",
+              })
+            : t({ hi: "योजना विवरण लोड हो रहा है…", en: "Loading scheme details…" })}
+        </p>
       </div>
     );
   if (error || !s)
     return (
       <div className="mx-auto max-w-3xl px-4 py-12">
-        <p role="alert" className="text-destructive">
-          {error ?? t({ hi: "योजना नहीं मिली।", en: "Scheme not found." })}
-        </p>
+        <div
+          role="alert"
+          className="rounded-xl bg-destructive/10 text-destructive p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+        >
+          <p className="font-medium">
+            {error ?? t({ hi: "योजना नहीं मिली।", en: "Scheme not found." })}
+          </p>
+          {error && (
+            <button
+              onClick={handleRetry}
+              disabled={loading}
+              className="btn-big !min-h-10 text-sm bg-primary text-primary-foreground disabled:opacity-60 flex items-center gap-1.5 shrink-0"
+            >
+              <RotateCw className="size-4" />
+              {t({ hi: "पुनः प्रयास करें", en: "Retry" })}
+            </button>
+          )}
+        </div>
         <Link to="/schemes" className="btn-big border bg-card mt-4">
           {t({ hi: "सभी योजनाएँ", en: "All schemes" })}
         </Link>

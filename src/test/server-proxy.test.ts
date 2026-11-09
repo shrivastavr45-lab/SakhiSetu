@@ -273,7 +273,10 @@ describe("Cloudflare Worker runtime proxy & environment resolution", () => {
     });
 
     it("returns 502 with UPSTREAM_UNREACHABLE on network error", async () => {
-      vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("Connection refused"));
+      // proxyToBackend retries GET once on network errors, so we mock two rejections.
+      vi.spyOn(globalThis, "fetch")
+        .mockRejectedValueOnce(new Error("Connection refused"))
+        .mockRejectedValueOnce(new Error("Connection refused"));
 
       const req = new Request("https://sakhisetu.test/api/health");
       const res = await proxyToBackend(req, { BACKEND_URL: "https://down-service.example.com" });

@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { ArrowLeft, RotateCcw, RotateCw } from "lucide-react";
 import { DISTRICTS, NEEDS, type Profile, type Scheme } from "@/lib/data";
-import { askAssistant, checkEligibility } from "@/lib/api";
+import { askAssistant, checkEligibility, useServerStarting } from "@/lib/api";
 import { useLang, type L } from "@/lib/i18n";
 import { SchemeCard } from "@/components/SchemeCard";
 
@@ -124,6 +124,7 @@ const QUESTIONS: Q[] = [
 
 function Finder() {
   const { t, lang } = useLang();
+  const isServerStarting = useServerStarting();
   const [step, setStep] = useState(0);
   const [profile, setProfile] = useState<Profile>({});
   const [results, setResults] = useState<Scheme[]>([]);
@@ -265,6 +266,7 @@ function Finder() {
           error={resultError}
           t={t}
           onRetry={handleRetry}
+          isServerStarting={isServerStarting}
           onRestart={() => {
             setStep(0);
             setProfile({});
@@ -376,6 +378,7 @@ type FinderResultsProps = {
   t: (s: L) => string;
   onRestart: () => void;
   onRetry: () => void;
+  isServerStarting?: boolean;
 };
 
 function SchemeResult({ s, t }: { s: Scheme; t: (value: L) => string }) {
@@ -398,7 +401,7 @@ function SchemeResult({ s, t }: { s: Scheme; t: (value: L) => string }) {
   );
 }
 
-function FinderResults({ results, loading, error, t, onRestart, onRetry }: FinderResultsProps) {
+function FinderResults({ results, loading, error, t, onRestart, onRetry, isServerStarting }: FinderResultsProps) {
   const verified = results.filter((s) => s.match?.hasStructuredRules === true);
   const unverified = results.filter((s) => s.match?.hasStructuredRules !== true);
 
@@ -461,9 +464,17 @@ function FinderResults({ results, loading, error, t, onRestart, onRetry }: Finde
       </p>
 
       {loading && (
-        <p role="status" className="mt-5 text-muted-foreground">
-          {t({ hi: "आपके जवाब जाँचे जा रहे हैं…", en: "Checking your answers…" })}
-        </p>
+        <div role="status" className="mt-5 flex items-center gap-2 text-muted-foreground">
+          <RotateCw className="size-4 animate-spin text-primary shrink-0" />
+          <p>
+            {isServerStarting
+              ? t({
+                  hi: "सर्वर शुरू हो रहा है, कृपया प्रतीक्षा करें...",
+                  en: "Server is starting. Please wait...",
+                })
+              : t({ hi: "आपके जवाब जाँचे जा रहे हैं…", en: "Checking your answers…" })}
+          </p>
+        </div>
       )}
 
       {!loading && (
